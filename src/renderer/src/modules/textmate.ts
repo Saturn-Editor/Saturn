@@ -26,7 +26,7 @@ let registry: Registry | null = null;
 /**
  * One registry per window. When a grammar includes another by scope name (PHP embedding
  * "text.html.basic", Markdown embedding "source.js" in code blocks), it's fetched from whichever
- * installed language provides it; if none does, that part is simply left uncoloured.
+ * installed language provides it; if none does, that part is left uncoloured.
  */
 function sharedRegistry(): Registry {
   registry ??= new Registry({
@@ -35,8 +35,10 @@ function sharedRegistry(): Registry {
       createOnigString: (s: string) => new OnigString(s),
     })),
     loadGrammar: async (scope) => {
-      const raw = await window.saturn.modules.grammarByScope(scope).catch(() => null);
-      return raw ? parseRawGrammar(JSON.stringify(raw), `${scope}.json`) : null;
+      // A missing scope gets an empty stub: returning null makes vscode-textmate drop the whole
+      // begin/end rule that includes it (e.g. a ```js fence would vanish instead of staying plain).
+      const raw = (await window.saturn.modules.grammarByScope(scope).catch(() => null)) ?? { scopeName: scope, patterns: [] };
+      return parseRawGrammar(JSON.stringify(raw), `${scope}.json`);
     },
   });
   return registry;

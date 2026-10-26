@@ -41,7 +41,7 @@ export class ModuleBridge {
     const api = window.saturn.modules;
     this.apply(await api.snapshot());
     api.onChanged((snapshot) => this.apply(snapshot));
-    api.onOpenFile((path) => void this.ws.documents.open(this.absolute(path)));
+    api.onOpenFile((path, line) => void this.ws.documents.open(this.absolute(path), { line }));
     api.onHostProblem((message) => (this.ws.notice.value = message));
   }
 

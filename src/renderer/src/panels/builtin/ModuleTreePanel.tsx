@@ -46,7 +46,7 @@ export function ModuleTreePanel({ panelId }: { panelId: string }) {
   const open = (item: TreeItem) => {
     if (!item.open) return;
     const path = /^([a-zA-Z]:)?[\\/]/.test(item.open.path) ? item.open.path : `${ws.projectPath}/${item.open.path}`;
-    void ws.documents.open(path);
+    void ws.documents.open(path, { line: item.open.line });
   };
 
   const rows: { item: TreeItem; depth: number }[] = [];
