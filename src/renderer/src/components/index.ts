@@ -2,7 +2,7 @@ export * from './icons';
 export { Button } from './Button';
 export { IconButton } from './IconButton';
 export { TextInput, Select, Checkbox, Toggle, FormField } from './inputs';
-export { Heading, DialogFooter, Badge, TitleBar } from './layout';
+export { Heading, DialogFooter, Badge, LanguageBadges, TitleBar } from './layout';
 export { SidebarNav, SidebarFooterButton, type SidebarItem } from './SidebarNav';
 export { Tabs, type TabItem } from './Tabs';
 export { TreeRow } from './TreeRow';

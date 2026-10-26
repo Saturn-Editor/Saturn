@@ -36,6 +36,7 @@ export interface SaturnApi {
     snapshot(): Promise<ContributionSnapshot>;
     onChanged(cb: (snapshot: ContributionSnapshot) => void): Unsubscribe;
     grammar(languageId: string): Promise<unknown | null>;
+    grammarByScope(scopeName: string): Promise<unknown | null>;
     runCommand(id: string): Promise<void>;
     treeChildren(panelId: string, parentId: string | null): Promise<TreeItem[]>;
     onTreeRefresh(cb: (panelId: string) => void): Unsubscribe;

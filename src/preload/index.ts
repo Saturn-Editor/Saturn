@@ -46,6 +46,7 @@ const api: SaturnApi = {
     snapshot: invoke('modules', 'snapshot'),
     onChanged: listen('modules', 'changed'),
     grammar: invoke('modules', 'grammar'),
+    grammarByScope: invoke('modules', 'grammarByScope'),
     runCommand: invoke('modules', 'runCommand'),
     treeChildren: invoke('modules', 'treeChildren'),
     onTreeRefresh: listen('modules', 'treeRefresh'),

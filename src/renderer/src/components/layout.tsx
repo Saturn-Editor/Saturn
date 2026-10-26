@@ -19,6 +19,15 @@ export function Badge({ text, class: cls = '' }: { text: string; class?: string 
   );
 }
 
+/** A project's language badges side by side, e.g. PHP + JS. */
+export function LanguageBadges({ badges }: { badges: string[] }) {
+  return (
+    <span class="inline-flex gap-0.5 shrink-0" data-testid="language-badges">
+      {badges.map((b) => <Badge key={b} text={b} />)}
+    </span>
+  );
+}
+
 /** Window title strip used by dialog-style windows. */
 export function TitleBar({ children }: { children: ComponentChildren }) {
   return <div class="px-3 py-1.5 bg-panel border-b border-divider font-semibold text-strong">{children}</div>;
