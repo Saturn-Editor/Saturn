@@ -1,0 +1,35 @@
+/* theme(static) keeps every Tailwind colour variable, since theme files can name any of them. */
+@import "tailwindcss" theme(static);
+
+/* Theme tokens: values come from the active theme JSON at runtime (see ThemeApplier). */
+@theme inline {
+  --color-app: var(--saturn-app);
+  --color-editor: var(--saturn-editor);
+  --color-panel: var(--saturn-panel);
+  --color-raised: var(--saturn-raised);
+  --color-divider: var(--saturn-divider);
+  --color-border: var(--saturn-border);
+  --color-text: var(--saturn-text);
+  --color-strong: var(--saturn-strong);
+  --color-muted: var(--saturn-muted);
+  --color-accent: var(--saturn-accent);
+  --color-on-accent: var(--saturn-on-accent);
+  --color-selection: var(--saturn-selection);
+  --color-hover: var(--saturn-hover);
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+
+/* Sharp corners everywhere: no rounded-* utilities exist. */
+@theme {
+  --radius-*: initial;
+}
+
+@layer base {
+  html, body, #app {
+    @apply h-full;
+  }
+  body {
+    @apply m-0 bg-app text-text text-xs antialiased select-none overflow-hidden;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+}
