@@ -1,0 +1,6 @@
+.superpowers/
+docs/
+.idea/
+node_modules/
+out/
+test-results/
