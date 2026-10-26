@@ -127,15 +127,36 @@ export class ModuleService {
     return null;
   }
 
-  /** The language of the first active module whose `workspaceContains:` event matches the project. */
-  async detectLanguage(projectPath: string): Promise<string | null> {
-    for (const { manifest } of await this.active()) {
-      const globs = (manifest.activationEvents ?? []).filter((e) => e.startsWith('workspaceContains:')).map((e) => e.slice(18));
-      for (const glob of globs) {
-        if ((await findFiles(projectPath, glob, 1)).length > 0) return manifest.contributes?.languages?.[0]?.id ?? null;
+  /**
+   * A grammar by TextMate scope name, from any active module. Lets one language's grammar embed
+   * another's, e.g. PHP pulling in "text.html.basic" from the HTML module.
+   */
+  async grammarByScope(scopeName: string): Promise<unknown | null> {
+    for (const { manifest, dir } of await this.active()) {
+      for (const lang of manifest.contributes?.languages ?? []) {
+        if (!lang.grammar) continue;
+        if (lang.scopeName && lang.scopeName !== scopeName) continue;
+        const raw = JSON.parse(await readFile(join(dir, lang.grammar), 'utf8')) as { scopeName?: string };
+        if (raw.scopeName === scopeName) return raw;
       }
     }
     return null;
+  }
+
+  /** Every language whose module's `workspaceContains:` events match the project, e.g. ["php", "javascript"]. */
+  async detectLanguages(projectPath: string): Promise<string[]> {
+    const found: string[] = [];
+    for (const { manifest } of await this.active()) {
+      const globs = (manifest.activationEvents ?? []).filter((e) => e.startsWith('workspaceContains:')).map((e) => e.slice(18));
+      for (const glob of globs) {
+        if ((await findFiles(projectPath, glob, 1)).length > 0) {
+          const id = manifest.contributes?.languages?.[0]?.id;
+          if (id) found.push(id);
+          break;
+        }
+      }
+    }
+    return found;
   }
 
   private async readManifest(dir: string): Promise<ModuleManifest> {

@@ -2,8 +2,8 @@ import { useEffect, useState } from 'preact/hooks';
 import type { ContributionSnapshot } from '@shared/modules';
 import type { RecentProject } from '@shared/types';
 import appIconUrl from '../../../../../resources/icons/icon.svg?url';
-import { Badge, Button, SidebarNav, TextInput } from '@renderer/components';
-import { EMPTY_SNAPSHOT } from '@renderer/modules/ModuleBridge';
+import { Button, LanguageBadges, SidebarNav, TextInput } from '@renderer/components';
+import { EMPTY_SNAPSHOT, projectBadges } from '@renderer/modules/ModuleBridge';
 
 type Page = 'projects' | 'marketplace' | 'settings';
 
@@ -19,7 +19,7 @@ function SaturnHeader() {
   );
 }
 
-function ProjectRow({ project, badge, onOpen, onRemove }: { project: RecentProject; badge: string; onOpen: () => void; onRemove: () => void }) {
+function ProjectRow({ project, badges, onOpen, onRemove }: { project: RecentProject; badges: string[]; onOpen: () => void; onRemove: () => void }) {
   const [confirming, setConfirming] = useState(false);
   return (
     <div class="hover:bg-hover">
@@ -29,7 +29,7 @@ function ProjectRow({ project, badge, onOpen, onRemove }: { project: RecentProje
         onClick={() => (project.missing ? setConfirming(true) : onOpen())}
         class={`flex items-center gap-2 px-2.5 py-1.5 cursor-pointer ${project.missing ? 'text-muted' : ''}`}
       >
-        <Badge text={badge} />
+        <LanguageBadges badges={badges} />
         <span class={`font-semibold ${project.missing ? '' : 'text-strong'}`}>{project.name}</span>
         <span class="text-muted truncate">{project.path}{project.missing && ' (missing)'}</span>
       </div>
@@ -66,7 +66,7 @@ export function WelcomeScreen() {
     if (page === 'marketplace') window.saturn.windows.openMarketplace();
   };
 
-  const badgeFor = (p: RecentProject) => modules.languages.find((l) => l.id === p.languageId)?.badge ?? 'T';
+  const badgesFor = (p: RecentProject) => projectBadges(modules, p.languageIds);
 
   const open = async (p: RecentProject) => {
     if ((await window.saturn.projects.openPath(p.path)) === 'missing') load();
@@ -95,7 +95,7 @@ export function WelcomeScreen() {
             <ProjectRow
               key={p.path}
               project={p}
-              badge={badgeFor(p)}
+              badges={badgesFor(p)}
               onOpen={() => void open(p)}
               onRemove={() => void window.saturn.projects.removeRecent(p.path).then(load)}
             />

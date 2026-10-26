@@ -17,6 +17,14 @@ export function languageForPath(snapshot: ContributionSnapshot, path: string): L
   return snapshot.languages.find((l) => l.extensions.some((ext) => name.endsWith(ext.toLowerCase())));
 }
 
+/** Badges for a project's languages (installed ones only, up to three); "T" for plain text. */
+export function projectBadges(snapshot: ContributionSnapshot, languageIds: string[]): string[] {
+  const badges = languageIds
+    .map((id) => snapshot.languages.find((l) => l.id === id)?.badge)
+    .filter((b): b is string => !!b);
+  return badges.length ? [...new Set(badges)].slice(0, 3) : ['T'];
+}
+
 /**
  * Connects an editor window to the enabled language modules: registers their commands, panels,
  * file templates and previews in the window's registries, and re-registers whenever modules change.

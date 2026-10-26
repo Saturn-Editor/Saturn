@@ -18,33 +18,48 @@ function loadOniguruma(): Promise<void> {
   return onig;
 }
 
-const grammars = new Map<string, Promise<IGrammar | null>>();
+type RawGrammar = { scopeName: string };
 
-/** Loads (once per window) the TextMate grammar a language module ships. */
+const grammars = new Map<string, Promise<IGrammar | null>>();
+let registry: Registry | null = null;
+
+/**
+ * One registry per window. When a grammar includes another by scope name (PHP embedding
+ * "text.html.basic", Markdown embedding "source.js" in code blocks), it's fetched from whichever
+ * installed language provides it; if none does, that part is simply left uncoloured.
+ */
+function sharedRegistry(): Registry {
+  registry ??= new Registry({
+    onigLib: loadOniguruma().then(() => ({
+      createOnigScanner: (patterns: string[]) => new OnigScanner(patterns),
+      createOnigString: (s: string) => new OnigString(s),
+    })),
+    loadGrammar: async (scope) => {
+      const raw = await window.saturn.modules.grammarByScope(scope).catch(() => null);
+      return raw ? parseRawGrammar(JSON.stringify(raw), `${scope}.json`) : null;
+    },
+  });
+  return registry;
+}
+
+/** Loads (once per window) the TextMate grammar for a language, plus any grammars it embeds. */
 export function loadGrammar(languageId: string): Promise<IGrammar | null> {
   let pending = grammars.get(languageId);
   if (!pending) {
     pending = (async () => {
-      const raw = await window.saturn.modules.grammar(languageId);
-      if (!raw) return null;
-      await loadOniguruma();
-      const registry = new Registry({
-        onigLib: Promise.resolve({
-          createOnigScanner: (patterns: string[]) => new OnigScanner(patterns),
-          createOnigString: (s: string) => new OnigString(s),
-        }),
-        loadGrammar: async (scope) => (scope === (raw as { scopeName: string }).scopeName ? parseRawGrammar(JSON.stringify(raw), 'grammar.json') : null),
-      });
-      return registry.loadGrammar((raw as { scopeName: string }).scopeName);
+      const raw = (await window.saturn.modules.grammar(languageId)) as RawGrammar | null;
+      return raw ? sharedRegistry().loadGrammar(raw.scopeName) : null;
     })();
     grammars.set(languageId, pending);
   }
   return pending;
 }
 
-/** Forgets loaded grammars, e.g. after a module was updated. */
+/** Forgets loaded grammars, e.g. after modules changed. */
 export function clearGrammars(): void {
   grammars.clear();
+  registry?.dispose();
+  registry = null;
 }
 
 /**

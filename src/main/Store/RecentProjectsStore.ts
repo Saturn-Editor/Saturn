@@ -8,7 +8,7 @@ type StoredProject = Omit<RecentProject, 'missing'>;
 const LIMIT = 20;
 
 function isStoredList(v: unknown): v is StoredProject[] {
-  return Array.isArray(v) && v.every((p) => typeof p?.path === 'string' && typeof p?.openedAt === 'number');
+  return Array.isArray(v) && v.every((p) => typeof p?.path === 'string' && typeof p?.openedAt === 'number' && Array.isArray(p?.languageIds));
 }
 
 function samePath(a: string, b: string): boolean {
@@ -28,15 +28,16 @@ export class RecentProjectsStore {
     return Promise.all(stored.map(async (p) => ({ ...p, missing: !(await this.exists(p.path)) })));
   }
 
-  async touch(path: string, languageId?: string | null): Promise<void> {
+  /** Records an opened project. `languageIds` replaces the stored list when given (main language first). */
+  async touch(path: string, languageIds?: string[]): Promise<void> {
     const full = resolve(path);
+    const previousIds = (await this.list()).find((p) => samePath(p.path, full))?.languageIds ?? [];
     await this.store.update((list) => {
-      const previous = list.find((p) => samePath(p.path, full));
       const entry: StoredProject = {
         path: full,
         name: basename(full),
         openedAt: Date.now(),
-        languageId: languageId !== undefined ? languageId : (previous?.languageId ?? null),
+        languageIds: languageIds ?? previousIds,
       };
       return [entry, ...list.filter((p) => !samePath(p.path, full))].slice(0, LIMIT);
     });

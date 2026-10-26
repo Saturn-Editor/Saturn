@@ -31,7 +31,8 @@ export interface RecentProject {
   path: string;
   name: string;
   openedAt: number;
-  languageId: string | null;
+  /** Languages in the project, main one first (e.g. ["php", "javascript"]); empty for plain text. */
+  languageIds: string[];
   missing: boolean;
 }
 

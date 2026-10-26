@@ -68,6 +68,7 @@ export class IpcRouter {
     this.handle('modules', 'list', () => modules.summaries());
     this.handle('modules', 'snapshot', () => modules.snapshot());
     this.handle('modules', 'grammar', (_e, languageId: string) => modules.grammar(languageId));
+    this.handle('modules', 'grammarByScope', (_e, scopeName: string) => modules.grammarByScope(scopeName));
     this.handle('modules', 'installDialog', async (e) => {
       const result = await dialog.showOpenDialog(this.senderWindow(e), {
         title: 'Install a language from a folder',
@@ -122,10 +123,15 @@ export class IpcRouter {
 
   private registerProjects(): void {
     const { windows, recent, creator, modules, host } = this.services;
-    /** Projects created with a language remember it; others are detected from their files. */
-    const openProject = async (path: string, languageId?: string | null) => {
-      const known = (await recent.list()).find((p) => p.path === path)?.languageId;
-      await recent.touch(path, languageId ?? known ?? (await modules.detectLanguage(path)));
+    /**
+     * Languages are re-detected on every open (projects grow new languages). A project created as a
+     * language keeps it first; otherwise the previously known main language stays first.
+     */
+    const openProject = async (path: string, createdAs?: string | null) => {
+      const known = (await recent.list()).find((p) => p.path === path)?.languageIds ?? [];
+      const detected = await modules.detectLanguages(path);
+      const main = createdAs ?? known[0];
+      await recent.touch(path, [...new Set([...(main ? [main] : []), ...detected])]);
       windows.openEditor(path);
     };
 
