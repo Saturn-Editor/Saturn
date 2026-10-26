@@ -30,10 +30,14 @@ export class EditorDocuments {
   readonly infos = signal<InfoDoc[]>([]);
   readonly activePath = signal<string | null>(null);
   readonly active = computed(() => this.docs.value.find((d) => d.path === this.activePath.value) ?? null);
+  /** A line (1-based) the editor should jump to once that file is showing. */
+  readonly reveal = signal<{ path: string; line: number } | null>(null);
 
   constructor(private readonly api: Pick<SaturnApi, 'fs' | 'window'>) {}
 
-  async open(path: string, opts: { force?: boolean } = {}): Promise<OpenResult> {
+  /** Opens (or switches to) a file; `line` (1-based) moves the cursor there. */
+  async open(path: string, opts: { force?: boolean; line?: number } = {}): Promise<OpenResult> {
+    if (opts.line) this.reveal.value = { path, line: opts.line };
     if (this.docs.value.some((d) => d.path === path)) {
       this.activePath.value = path;
       return 'opened';

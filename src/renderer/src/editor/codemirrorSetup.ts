@@ -25,6 +25,14 @@ const saturnTheme = EditorView.theme({
   '.cm-textfield': { backgroundColor: 'var(--saturn-editor)', border: '1px solid var(--saturn-border)', color: 'var(--saturn-strong)' },
   '.cm-button': { backgroundImage: 'none', backgroundColor: 'var(--saturn-panel)', border: '1px solid var(--saturn-border)', color: 'var(--saturn-strong)' },
   '.cm-searchMatch': { backgroundColor: 'var(--saturn-selection)' },
+  // Popups (autocomplete and other tooltips) follow the theme instead of CodeMirror's light default.
+  '.cm-tooltip': { backgroundColor: 'var(--saturn-raised)', color: 'var(--saturn-text)', border: '1px solid var(--saturn-border)' },
+  '.cm-tooltip-autocomplete > ul': { fontFamily: 'var(--font-mono)' },
+  '.cm-tooltip-autocomplete > ul > li': { padding: '2px 8px' },
+  '.cm-tooltip-autocomplete > ul > li[aria-selected]': { backgroundColor: 'var(--saturn-selection)', color: 'var(--saturn-strong)' },
+  '.cm-completionDetail': { color: 'var(--saturn-muted)', fontStyle: 'normal', marginLeft: '12px' },
+  '.cm-completionMatchedText': { textDecoration: 'none', color: 'var(--saturn-accent)' },
+  '.cm-completionInfo': { backgroundColor: 'var(--saturn-raised)', border: '1px solid var(--saturn-border)' },
 });
 
 export interface EditorCallbacks {

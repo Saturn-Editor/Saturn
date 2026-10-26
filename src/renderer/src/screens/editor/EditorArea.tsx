@@ -85,6 +85,17 @@ export function EditorArea() {
     }
   }, [activeDoc?.path, documents.docs.value.length, modulesVersion]);
 
+  // Jump to a requested line once its file is the one showing.
+  const reveal = documents.reveal.value;
+  useEffect(() => {
+    const v = view.current;
+    if (!v || !reveal || reveal.path !== shownPath.current) return;
+    const line = v.state.doc.line(Math.min(Math.max(1, reveal.line), v.state.doc.lines));
+    v.dispatch({ selection: { anchor: line.from }, effects: EditorView.scrollIntoView(line.from, { y: 'center' }) });
+    v.focus();
+    documents.reveal.value = null;
+  }, [reveal, activeDoc?.path]);
+
   const tabs = [
     ...documents.docs.value.map((d) => ({ id: d.path, label: d.name, dirty: d.dirty, closable: true })),
     ...documents.infos.value.map((i) => ({ id: i.path, label: i.name, closable: true })),

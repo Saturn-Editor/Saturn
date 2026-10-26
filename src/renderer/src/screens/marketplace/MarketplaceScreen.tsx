@@ -34,7 +34,14 @@ function InstalledLanguages({ onError }: { onError: (m: string | null) => void }
   }, []);
   const act = (fn: () => Promise<void>) => void fn().then(() => onError(null), (e) => onError(errorText(e)));
 
-  if (modules.length === 0) return <p class="px-4 text-muted">No languages installed yet. Use Install from folder… to add one.</p>;
+  if (modules.length === 0) {
+    return (
+      <div class="h-full flex flex-col items-center justify-center gap-1.5">
+        <div class="text-strong">No languages installed yet</div>
+        <div class="text-muted">Use Install from folder… to add one.</div>
+      </div>
+    );
+  }
   return (
     <>
       {modules.map((m) => (
