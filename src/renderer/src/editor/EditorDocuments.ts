@@ -192,6 +192,26 @@ export class EditorDocuments {
     this.reportDirty();
   }
 
+  /**
+   * Re-reads every open file without unsaved changes (e.g. after a branch switch or pull) so editors
+   * show what's on disk. Files that no longer exist are closed.
+   */
+  async reloadClean(): Promise<void> {
+    for (const doc of this.docs.value.filter((d) => !d.dirty)) {
+      const result = await this.api.fs.readFile(doc.path).catch(() => null);
+      if (!result) {
+        this.close(doc.path);
+        continue;
+      }
+      if (result.kind !== 'text') continue;
+      const text = result.text.replace(/\r\n/g, '\n');
+      // Skip if it was edited while reading, or hasn't changed.
+      const current = this.docs.value.find((d) => d.path === doc.path);
+      if (!current || current.dirty || current.text === text) continue;
+      this.docs.value = this.docs.value.map((d) => (d.path === doc.path ? { ...d, text, savedText: text, eol: result.eol } : d));
+    }
+  }
+
   async saveAll(): Promise<void> {
     for (const d of this.docs.value.filter((x) => x.dirty)) await this.save(d.path);
   }

@@ -178,6 +178,7 @@ const api: SaturnApi = {
     pickFile: invoke('projects', 'pickFile'),
     clone: invoke('projects', 'clone'),
     create: invoke('projects', 'create'),
+    onCreateProgress: listen('projects', 'createProgress'),
     defaultParentDir: invoke('projects', 'defaultParentDir'),
   },
   themes: {

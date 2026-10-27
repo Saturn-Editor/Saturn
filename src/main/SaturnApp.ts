@@ -138,6 +138,7 @@ export class SaturnApp {
       changed: (projectPath, state) => router?.sendToProject(projectPath, 'debug', 'changed', state),
       output: (projectPath, text, category) => router?.sendToProject(projectPath, 'debug', 'output', text, category),
       message: (projectPath, message, kind) => router?.sendToProject(projectPath, 'modules', 'message', { message, kind, moduleId: 'saturn' }),
+      runInTerminal: (projectPath, title, command) => router?.sendToProject(projectPath, 'modules', 'runInTerminal', title, command),
     });
     const host = new ExtensionHostService({
       openFile: (projectPath, path, line, column) => router?.sendToProject(projectPath, 'modules', 'openFile', path, line, column),

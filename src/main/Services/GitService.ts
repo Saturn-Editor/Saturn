@@ -160,13 +160,22 @@ export class GitService {
   }
 
   /**
-   * Switches branch, shelving pending changes first: they're stashed (untracked files included) under
+   * Switches branch. With "bring", pending changes come along (Git refuses if they'd clash with the
+   * target branch, and nothing changes). With "shelve", they're stashed (untracked files included) under
    * a "saturn-shelf:<branch>" message for the branch being left, and a shelf saved earlier for the
-   * target branch is restored. If the switch fails, the changes are put straight back.
+   * target branch is restored; if the switch fails, the changes are put straight back.
    */
-  async checkout(branch: string): Promise<void> {
+  async checkout(branch: string, mode: 'bring' | 'shelve' = 'shelve'): Promise<void> {
     const { branch: from, changes } = await this.status();
     if (branch === from) return;
+    if (mode === 'bring') {
+      await git(this.root, ['switch', branch]).catch((e: Error) => {
+        throw new Error(/would be overwritten|commit your changes or stash/i.test(e.message)
+          ? `Your changes clash with ${branch}, so they can't come along. Commit them, or switch and shelve them instead`
+          : e.message);
+      });
+      return;
+    }
     let shelved = false;
     if (changes.length > 0) {
       await git(this.root, ['stash', 'push', '--include-untracked', '-m', `${SHELF}${from ?? 'HEAD'}`]);

@@ -5,6 +5,7 @@ import { ButtonStrip } from '@renderer/panels/ButtonStrip';
 import { IconStrip } from '@renderer/panels/IconStrip';
 import { EditorArea } from './EditorArea';
 import { EditorWorkspace, WorkspaceContext } from './EditorWorkspace';
+import { BranchSwitchPrompt } from './BranchSwitchPrompt';
 import { StatusBar } from './StatusBar';
 import { TopBar } from './TopBar';
 
@@ -49,6 +50,7 @@ export function EditorScreen() {
           <ButtonStrip />
         </div>
         <StatusBar />
+        <BranchSwitchPrompt />
       </div>
     </WorkspaceContext.Provider>
   );

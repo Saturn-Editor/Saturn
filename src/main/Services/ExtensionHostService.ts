@@ -24,6 +24,9 @@ export class ExtensionHostService {
   private child: UtilityProcess | null = null;
   private rpc: Rpc | null = null;
   private ready: Promise<void> = Promise.resolve();
+  /** Progress listeners for New Project creations in flight, by id. */
+  private readonly createProgress = new Map<string, (message: string) => void>();
+  private nextCreateId = 0;
 
   constructor(private readonly events: HostEvents) {}
 
@@ -50,6 +53,7 @@ export class ExtensionHostService {
     rpc.handle('notify', (n: Parameters<HostEvents['notify']>[0]) => this.events.notify(n));
     rpc.handle('restartLanguageServer', (moduleId: string) => this.events.restartLanguageServer(moduleId));
     rpc.handle('runInTerminal', (projectPath: string, name: string, command: string) => this.events.runInTerminal(projectPath, name, command));
+    rpc.handle('createProgress', (createId: string, message: string) => this.createProgress.get(createId)?.(message));
     child.on('message', (message) => rpc.receive(message));
     child.on('exit', (code) => {
       rpc.rejectAll('The extension host stopped');
@@ -123,8 +127,15 @@ export class ExtensionHostService {
     return this.call('templateFile', id, ctx);
   }
 
-  createProject(moduleId: string, ctx: Ctx & { fields: Record<string, string | boolean> }): Promise<void> {
-    return this.call('createProject', moduleId, ctx);
+  /** Runs the language's onCreate (which may take a while); `onProgress` hears its `ctx.progress` messages. */
+  async createProject(moduleId: string, ctx: Ctx & { fields: Record<string, string | boolean> }, onProgress?: (message: string) => void): Promise<void> {
+    const createId = String(++this.nextCreateId);
+    if (onProgress) this.createProgress.set(createId, onProgress);
+    try {
+      await this.call('createProject', moduleId, { ...ctx, createId });
+    } finally {
+      this.createProgress.delete(createId);
+    }
   }
 
   runEntries(ctx: Ctx): Promise<{ moduleId: string; name: string; command: string }[]> {

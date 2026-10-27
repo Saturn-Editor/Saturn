@@ -220,7 +220,9 @@ export class CodeModuleService {
           const ref = typeof f.default === 'string' ? /^\$\{setting:([\w.-]+)\}$/.exec(f.default) : null;
           return ref ? { ...f, default: settings[ref[1]] ?? '' } : f;
         });
-        snap.newProject.push({ ...lc.newProject, fields, moduleId: m.id, languageName, badge, icon });
+        // Template icons become saturn-icon:// URLs like panel icons (or the module's icon).
+        const tabs = lc.newProject.tabs?.map((t) => ({ ...t, templates: t.templates.map((tpl) => ({ ...tpl, icon: tpl.icon ? (ownIcon(tpl.icon) ?? undefined) : undefined })) }));
+        snap.newProject.push({ ...lc.newProject, tabs, fields, moduleId: m.id, languageName, badge, icon });
       }
     }
     return snap;

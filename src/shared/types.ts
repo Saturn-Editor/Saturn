@@ -157,6 +157,8 @@ export interface AppSettings {
   customKeymaps: CustomKeymap[];
   /** Typing an opening bracket or quote also inserts the closer. */
   autoCloseBrackets: boolean;
+  /** Switching branches with uncommitted changes: ask each time, bring them to the new branch, or shelve them for the old one. */
+  branchSwitch: BranchSwitchMode;
   /** Saving a file (Save File) formats it first with its language server, where the language supports it. */
   formatOnSave: boolean;
   /** Interface and editor text size as a percentage (100 is the default); scales every window. */
@@ -178,6 +180,8 @@ export interface AppSettings {
   /** The marketplace index URL; the official one unless the user changed it. */
   marketplaceUrl: string;
 }
+
+export type BranchSwitchMode = 'ask' | 'bring' | 'shelve';
 
 export type FileEncoding = 'utf-8' | 'utf-16' | 'us-ascii' | 'iso-8859-1';
 

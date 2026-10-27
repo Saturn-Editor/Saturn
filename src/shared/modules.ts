@@ -98,12 +98,45 @@ export interface NewProjectField {
   type: NewProjectFieldType;
   default?: string | boolean;
   options?: { value: string; label: string }[];
+  /**
+   * New Project only: show (and send) the field only for these templates and/or tabs, e.g.
+   * { "template": ["console"] }. Both lists must match when both are given.
+   */
+  when?: { template?: string[]; tab?: string[] };
+}
+
+/** One project template in a New Project tab, e.g. "Console App". */
+export interface NewProjectTemplate {
+  id: string;
+  label: string;
+  description?: string;
+  /** An .svg or .png file in the module folder, as for panel icons. */
+  icon?: string;
+}
+
+/** A tab of templates along the top of the language's New Project page, e.g. ".NET" or "Web". */
+export interface NewProjectTab {
+  id: string;
+  label: string;
+  templates: NewProjectTemplate[];
 }
 
 export interface ManifestNewProject {
   /** The language the project is created as (shown in the New Project sidebar). */
   language: string;
+  /**
+   * Templates to choose from, in tabs along the top. The chosen one reaches `onCreate` as
+   * `fields.tab` and `fields.template`. Leave out for a page of fields only.
+   */
+  tabs?: NewProjectTab[];
   fields: NewProjectField[];
+}
+
+/** Whether a New Project field applies to the chosen tab and template (fields without `when` always do). */
+export function fieldApplies(field: NewProjectField, choice: { tab?: string; template?: string }): boolean {
+  if (!field.when) return true;
+  const { template, tab } = field.when;
+  return (!template || (!!choice.template && template.includes(choice.template))) && (!tab || (!!choice.tab && tab.includes(choice.tab)));
 }
 
 /**
