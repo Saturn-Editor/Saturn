@@ -2,19 +2,40 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { AppNotification } from '@shared/modules';
 import { BellIcon, Button, CloseIcon, IconButton } from '@renderer/components';
 
+const TOAST_MS = 6000;
+
 /**
  * The bell next to Settings: a count of unread notifications, and a menu listing them with their
- * actions. Opening the menu marks everything read.
+ * actions. Opening the menu marks everything read. A notification that arrives while the window is
+ * open also pops up briefly at the bottom right (it stays in the menu too).
  */
 export function NotificationsMenu() {
   const [items, setItems] = useState<AppNotification[]>([]);
   const [open, setOpen] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const root = useRef<HTMLDivElement>(null);
+  const [toast, setToast] = useState<AppNotification | null>(null);
+  const seen = useRef<Set<string> | null>(null);
   useEffect(() => {
-    void window.saturn.notifications.list().then(setItems);
-    return window.saturn.notifications.onChanged(setItems);
+    void window.saturn.notifications.list().then((list) => {
+      // Ones that were already there when the window opened don't pop up.
+      seen.current = new Set(list.map((n) => n.id));
+      setItems(list);
+    });
+    return window.saturn.notifications.onChanged((list) => {
+      const fresh = seen.current ? list.find((n) => !n.read && !seen.current!.has(n.id)) : undefined;
+      for (const n of list) seen.current?.add(n.id);
+      if (fresh) setToast(fresh);
+      setItems(list);
+    });
   }, []);
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), TOAST_MS);
+    return () => clearTimeout(timer);
+  }, [toast?.id]);
+  // A dismissed or cleared notification's pop-up goes too.
+  const shownToast = toast && items.some((n) => n.id === toast.id) ? toast : null;
   // Close on a click outside the menu or Escape.
   useEffect(() => {
     if (!open) return;
@@ -46,6 +67,23 @@ export function NotificationsMenu() {
         <span class="absolute -top-0.5 -right-0.5 min-w-3.5 h-3.5 px-0.5 bg-accent text-on-accent text-[9px] font-semibold leading-3.5 text-center pointer-events-none" data-testid="notifications-count">
           {unread}
         </span>
+      )}
+      {shownToast && !open && (
+        <div class="fixed z-40 bottom-8 right-4 w-80 px-3 py-2.5 bg-raised border border-border shadow-lg shadow-black/40" role="status" data-testid="notification-toast">
+          <div class="flex items-start gap-2">
+            <span class={`flex-1 font-semibold ${shownToast.kind === 'info' ? 'text-strong' : 'text-accent'}`}>{shownToast.title}</span>
+            <IconButton icon={<CloseIcon class="size-3" />} label="Hide" class="size-5" onClick={() => setToast(null)} />
+          </div>
+          {shownToast.message && <p class="m-0 mt-1 text-text break-words">{shownToast.message}</p>}
+          {shownToast.actions.length > 0 && (
+            <div class="flex flex-wrap gap-2 mt-2">
+              {shownToast.actions.map((a, i) => <Button key={a.label} onClick={() => {
+                act(shownToast, i);
+                setToast(null);
+              }}>{a.label}</Button>)}
+            </div>
+          )}
+        </div>
       )}
       {open && (
         <div class="absolute z-20 top-8 right-0 w-96 max-h-[60vh] flex flex-col bg-raised border border-border shadow-lg shadow-black/40" data-testid="notifications-menu">

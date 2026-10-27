@@ -1,5 +1,4 @@
 import {Button, Heading} from '@renderer/components';
-import {ButtonHTMLAttributes} from "preact/compat";
 
 export function HelpPage() {
   return (

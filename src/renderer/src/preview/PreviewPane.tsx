@@ -22,6 +22,9 @@ interface PreviewPaneProps {
 /** Renders a file's preview into a sandboxed frame (no scripts), re-rendering as the text changes. */
 export function PreviewPane({ provider, text, path, projectPath }: PreviewPaneProps) {
   const [html, setHtml] = useState('');
+  // True until the first render for this file finishes (later edits keep showing the last render).
+  const [loading, setLoading] = useState(true);
+  useEffect(() => setLoading(true), [provider, path]);
   const [themeVersion, setThemeVersion] = useState(0);
 
   useEffect(() => {
@@ -35,9 +38,15 @@ export function PreviewPane({ provider, text, path, projectPath }: PreviewPanePr
     const timer = setTimeout(async () => {
       try {
         const body = await provider.render(text, { path, projectPath });
-        if (!cancelled) setHtml(body);
+        if (!cancelled) {
+          setHtml(body);
+          setLoading(false);
+        }
       } catch (e) {
-        if (!cancelled) setHtml(`<p>Preview failed: ${String((e as Error).message).replace(/</g, '&lt;')}</p>`);
+        if (!cancelled) {
+          setHtml(`<p>Preview failed: ${String((e as Error).message).replace(/</g, '&lt;')}</p>`);
+          setLoading(false);
+        }
       }
     }, RENDER_DELAY_MS);
     return () => {
@@ -47,6 +56,9 @@ export function PreviewPane({ provider, text, path, projectPath }: PreviewPanePr
   }, [provider, text, path]);
 
   const doc = `<!doctype html><html><head><meta charset="utf-8"><style>${themeStyles()}</style></head><body>${html}</body></html>`;
+  if (loading) {
+    return <div class="w-full h-full flex items-center justify-center bg-editor text-muted" data-testid="file-preview-loading">Loading…</div>;
+  }
   return (
     <iframe
       key={themeVersion}

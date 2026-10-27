@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { GitStatus, GitTag } from '@shared/types';
-import { ChevronDownIcon, ChevronRightIcon, TextInput } from '@renderer/components';
+import { ChevronDownIcon, ChevronRightIcon, IconButton, PlusIcon, TextInput } from '@renderer/components';
 import { errorText } from './gitState';
 
 type Kind = 'branch' | 'remote' | 'tag';
 
 /** What a row is doing: renaming in place, asking to confirm a delete, or offering a forced delete. */
-type Editing = { kind: Kind; name: string; mode: 'rename' | 'delete' | 'force' } | null;
+type Editing = { kind: Kind; name: string; mode: 'rename' | 'delete' | 'force' } | { kind: 'branch'; name: ''; mode: 'create' } | null;
 
 interface GitRefsProps {
   status: GitStatus;
@@ -17,7 +17,8 @@ interface GitRefsProps {
 
 /**
  * The Git panel's sidebar: local branches, remote branches and tags. Click one to see its history;
- * local branches can be checked out (double-click), renamed and deleted, and tags renamed and deleted.
+ * local branches can be created (+), checked out (double-click), renamed and deleted (the current one
+ * too: Saturn switches to main first, bringing pending changes), and tags renamed and deleted.
  */
 export function GitRefs({ status, selected, onSelect }: GitRefsProps) {
   const [branches, setBranches] = useState<string[]>([]);
@@ -56,6 +57,8 @@ export function GitRefs({ status, selected, onSelect }: GitRefsProps) {
       if (selected === from) onSelect(name.trim());
     });
   };
+  const fallback = branches.find((b) => b !== status.branch && b === 'main') ?? branches.find((b) => b !== status.branch && b === 'master')
+    ?? branches.find((b) => b !== status.branch);
   const remove = (kind: Kind, target: string, force = false) => run(
     kind === 'tag' ? window.saturn.git.deleteTag(target) : window.saturn.git.deleteBranch(target, force),
     () => selected === target && onSelect(null),
@@ -64,22 +67,56 @@ export function GitRefs({ status, selected, onSelect }: GitRefsProps) {
   const section = (kind: Kind, title: string, count: number) => {
     const open = !closed.has(kind);
     return (
-      <button
-        type="button"
-        class="w-full flex items-center gap-1.5 h-6 px-2 font-semibold text-strong hover:bg-hover"
-        onClick={() => {
-          const next = new Set(closed);
-          if (open) next.add(kind);
-          else next.delete(kind);
-          setClosed(next);
-        }}
-      >
-        {open ? <ChevronDownIcon class="size-3.5 text-muted" /> : <ChevronRightIcon class="size-3.5 text-muted" />}
-        <span class="flex-1 text-left">{title}</span>
-        <span class="text-muted font-normal">{count}</span>
-      </button>
+      <div class="group flex items-center h-6 pr-2 hover:bg-hover">
+        <button
+          type="button"
+          class="flex-1 min-w-0 flex items-center gap-1.5 h-6 pl-2 font-semibold text-strong"
+          onClick={() => {
+            const next = new Set(closed);
+            if (open) next.add(kind);
+            else next.delete(kind);
+            setClosed(next);
+          }}
+        >
+          {open ? <ChevronDownIcon class="size-3.5 text-muted" /> : <ChevronRightIcon class="size-3.5 text-muted" />}
+          <span class="flex-1 text-left">{title}</span>
+        </button>
+        {kind === 'branch' && (
+          <IconButton
+            class="size-5 hidden group-hover:inline-flex"
+            icon={<PlusIcon class="size-3.5" />}
+            label={`New branch from ${status.branch ?? 'HEAD'}`}
+            data-testid="git-ref-new-branch"
+            onClick={() => {
+              setClosed((c) => new Set([...c].filter((k) => k !== 'branch')));
+              setName('');
+              setEditing({ kind: 'branch', name: '', mode: 'create' });
+            }}
+          />
+        )}
+        <span class="text-muted group-hover:hidden">{count}</span>
+      </div>
     );
   };
+
+  /** The name box for a new branch: created from the current one and switched to, pending changes included. */
+  const createRow = editing?.mode === 'create' && (
+    <div class="px-2 py-0.5 pl-7">
+      <TextInput
+        class="w-full"
+        value={name}
+        onInput={setName}
+        placeholder={`New branch from ${status.branch ?? 'HEAD'}`}
+        testId="git-ref-new-name"
+        autoFocus
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') run(window.saturn.git.createBranch(name), () => onSelect(null));
+          if (e.key === 'Escape') setEditing(null);
+        }}
+        onBlur={() => setEditing(null)}
+      />
+    </div>
+  );
 
   const row = (kind: Kind, ref: string, label: string, detail?: string) => {
     const current = kind === 'branch' && ref === status.branch;
@@ -106,7 +143,9 @@ export function GitRefs({ status, selected, onSelect }: GitRefsProps) {
     if (edit) {
       return (
         <div key={`${kind}:${ref}`} class="flex items-center gap-2 h-6 pl-7 pr-2 bg-hover" data-testid="git-ref-confirm">
-          <span class="flex-1 truncate">{edit.mode === 'force' ? `${label} has unmerged commits` : `Delete ${label}?`}</span>
+          <span class="flex-1 truncate" title={current && fallback ? `Switches to ${fallback} first, bringing your changes` : undefined}>
+            {edit.mode === 'force' ? `${label} has unmerged commits` : current && fallback ? `Delete ${label} and switch to ${fallback}?` : `Delete ${label}?`}
+          </span>
           <button type="button" class="text-accent hover:text-strong" onClick={() => remove(kind, ref, edit.mode === 'force')}>
             {edit.mode === 'force' ? 'Delete anyway' : 'Delete'}
           </button>
@@ -140,7 +179,7 @@ export function GitRefs({ status, selected, onSelect }: GitRefsProps) {
                 setEditing({ kind, name: ref, mode: 'rename' });
               }}
             >Rename</button>
-            {!current && (
+            {(!current || !!fallback) && (
               <button
                 type="button"
                 class="text-muted hover:text-accent"
@@ -160,6 +199,7 @@ export function GitRefs({ status, selected, onSelect }: GitRefsProps) {
     <div class="h-full overflow-y-auto py-1" role="tree" data-testid="git-refs">
       {problem && <p class="m-0 px-2 pb-1 text-accent break-words" role="alert">{problem}</p>}
       {section('branch', 'Branches', branches.length)}
+      {!closed.has('branch') && createRow}
       {!closed.has('branch') && branches.map((b) => row('branch', b, b))}
       {remotes.length > 0 && section('remote', 'Remote branches', remotes.length)}
       {!closed.has('remote') && remotes.map((b) => row('remote', b, b))}

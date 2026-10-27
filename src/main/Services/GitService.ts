@@ -224,10 +224,26 @@ export class GitService {
     await git(this.root, ['pull', '--ff-only']);
   }
 
-  /** Deletes a local branch; `force` also deletes one whose commits aren't merged anywhere. */
+  /**
+   * Deletes a local branch; `force` also deletes one whose commits aren't merged anywhere. Deleting the
+   * current branch first switches to main (or master, or another branch), bringing pending changes along.
+   */
   async deleteBranch(name: string, force = false): Promise<void> {
     const { branch } = await this.status();
-    if (name === branch) throw new Error(`Switch away from ${name} before deleting it`);
+    if (name === branch) {
+      const others = (await this.branches()).filter((b) => b !== name);
+      const fallback = others.find((b) => b === 'main') ?? others.find((b) => b === 'master') ?? others[0];
+      if (!fallback) throw new Error(`${name} is the only branch, so it can't be deleted`);
+      // Unmerged work would be lost once we've switched away, so check before moving.
+      if (!force) {
+        const unmerged = await git(this.root, ['rev-list', '--count', `${fallback}..${name}`]).then((o) => Number(o.trim()) > 0, () => false);
+        if (unmerged) throw new Error(`${name} has commits that aren't merged anywhere`);
+      }
+      // A plain switch carries uncommitted changes over (unlike checkout's shelving).
+      await git(this.root, ['switch', fallback]);
+      await git(this.root, ['branch', '-D', '--', name]);
+      return;
+    }
     await git(this.root, ['branch', force ? '-D' : '-d', '--', name]).catch((e: Error) => {
       throw new Error(/not fully merged/.test(e.message) ? `${name} has commits that aren't merged anywhere` : e.message);
     });
