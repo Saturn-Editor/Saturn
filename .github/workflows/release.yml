@@ -65,6 +65,11 @@ jobs:
           node-version: 22
           cache: npm
 
+      # The .rpm is built with rpmbuild, which Ubuntu runners don't have.
+      - name: Install rpm tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
       - run: npm ci
 
       - run: npm run build
@@ -99,7 +104,28 @@ jobs:
     needs: [check, build]
     runs-on: ubuntu-latest
     steps:
+      # Download links for each platform go at the top of the description, above GitHub's generated notes.
+      # The file names come from electron-builder.yml (nsis.artifactName and the default mac/linux names).
       - name: Publish the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "v${{ needs.check.outputs.version }}" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+        run: |
+          version="${{ needs.check.outputs.version }}"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/v$version"
+          {
+            echo "## Download"
+            echo
+            # Linux lines link both architectures: "[Saturn-1.0.0-x64.deb](…) · [Saturn-1.0.0-arm64.deb](…)".
+            linux() { echo "[Saturn-$version-x64.$1]($base/Saturn-$version-x64.$1) · [Saturn-$version-arm64.$1]($base/Saturn-$version-arm64.$1)"; }
+            echo "- **Windows:** [Saturn-Setup-$version.exe]($base/Saturn-Setup-$version.exe)"
+            echo
+            echo "- **macOS:** [Saturn-$version-arm64.dmg]($base/Saturn-$version-arm64.dmg)"
+            echo "- **macOS (Intel):** [Saturn-$version.dmg]($base/Saturn-$version.dmg)"
+            echo
+            echo "- **General Linux:** $(linux AppImage)"
+            echo "- **Debian & Ubuntu:** $(linux deb)"
+            echo "- **Fedora:** $(linux rpm)"
+            echo
+            gh release view "v$version" --repo "$GITHUB_REPOSITORY" --json body -q .body
+          } > notes.md
+          gh release edit "v$version" --repo "$GITHUB_REPOSITORY" --notes-file notes.md --draft=false --latest
