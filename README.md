@@ -3,7 +3,7 @@
 </center>
 
 # Say hello to Saturn
-A lightweight, highly customisable code editor. It's so good, we use it to make it.
+A lightweight, customisable, and extensible code editor. It's so good, we use it to make it.
 
 Saturn is entirely modular. By default it is a simple text editor, but with language and code modules, it comes alive. You choose what you want to run, making this one of the most lightweight code editors out there.
 
