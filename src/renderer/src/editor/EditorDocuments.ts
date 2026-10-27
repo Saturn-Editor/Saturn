@@ -25,6 +25,8 @@ export interface InfoDoc {
   workingPath?: string;
 }
 
+/** How many editors a split can have. */
+const MAX_GROUPS = 4;
 const TYPING_SAVE_MS = 2000;
 const IDLE_SAVE_MS = 1000;
 
@@ -44,42 +46,78 @@ export class EditorDocuments {
   readonly activePath = signal<string | null>(null);
   readonly active = computed(() => this.docs.value.find((d) => d.path === this.activePath.value) ?? null);
   /**
-   * Split editor: a second editor beside the first. `activePath` is always the focused side's file;
-   * `otherPath` is the other side's. Both sides share the open tabs.
+   * Split editor: up to MAX_GROUPS editors side by side ("right") or stacked ("down"), all sharing the
+   * open tabs. `activePath` is always the focused group's file; `groupPaths` holds every group's file
+   * (the focused group's entry is kept in step with `activePath`).
    */
-  readonly split = signal(false);
-  readonly focused = signal<0 | 1>(0);
-  readonly otherPath = signal<string | null>(null);
+  readonly groupPaths = signal<(string | null)[]>([null]);
+  readonly focused = signal(0);
+  readonly splitDirection = signal<'right' | 'down'>('right');
+  readonly split = computed(() => this.groupPaths.value.length > 1);
   /** A line and optional column (both 1-based) the editor should jump to once that file is showing. */
   readonly reveal = signal<{ path: string; line: number; column?: number } | null>(null);
 
   constructor(private readonly api: Pick<SaturnApi, 'fs' | 'window'>) {}
 
-  /** The file one side of the editor shows (0 is the left, or the only, editor). */
-  pathFor(group: 0 | 1): string | null {
-    return group === this.focused.value ? this.activePath.value : this.otherPath.value;
+  /** The file a group shows (0 is the first, or the only, editor). */
+  pathFor(group: number): string | null {
+    return group === this.focused.value ? this.activePath.value : (this.groupPaths.value[group] ?? null);
   }
 
-  /** Moves focus to one side of the split; `activePath` becomes that side's file. */
-  focus(group: 0 | 1): void {
-    if (group === this.focused.value || !this.split.value) return;
-    const was = this.activePath.value;
-    this.activePath.value = this.otherPath.value;
-    this.otherPath.value = was;
+  /** Moves focus to a group; `activePath` becomes its file. */
+  focus(group: number): void {
+    if (group === this.focused.value || group >= this.groupPaths.value.length) return;
+    this.syncFocused();
     this.focused.value = group;
+    this.activePath.value = this.groupPaths.value[group] ?? null;
   }
 
-  /** Split Right opens the current file in a second editor; closing the split keeps the focused side's file. */
+  /** Shows a file in a group (e.g. a tab dragged there), focusing it. */
+  showIn(group: number, path: string): void {
+    this.focus(group);
+    this.activePath.value = path;
+  }
+
+  /** Split Right / Split Down: a new editor after the focused one, showing the same file, focused. */
+  splitEditor(direction: 'right' | 'down' = this.splitDirection.value): void {
+    if (this.groupPaths.value.length >= MAX_GROUPS) return;
+    this.syncFocused();
+    this.splitDirection.value = direction;
+    const at = this.focused.value + 1;
+    const paths = [...this.groupPaths.value];
+    paths.splice(at, 0, this.activePath.value);
+    this.groupPaths.value = paths;
+    this.focused.value = at;
+  }
+
+  /** Closes one editor of a split (the focused one by default); its neighbour takes focus. */
+  closeGroup(group = this.focused.value): void {
+    if (this.groupPaths.value.length <= 1) return;
+    this.syncFocused();
+    const paths = this.groupPaths.value.filter((_, i) => i !== group);
+    const next = Math.min(group === this.focused.value ? Math.max(0, group - 1) : this.focused.value - (group < this.focused.value ? 1 : 0), paths.length - 1);
+    this.groupPaths.value = paths;
+    this.focused.value = next;
+    this.activePath.value = paths[next] ?? null;
+  }
+
+  /** Closes every split but the focused editor. */
+  unsplit(): void {
+    this.groupPaths.value = [this.activePath.value];
+    this.focused.value = 0;
+  }
+
+  /** Splits if there's one editor, else closes the focused split (the Split Editor command). */
   toggleSplit(): void {
-    if (this.split.value) {
-      this.split.value = false;
-      this.focused.value = 0;
-      this.otherPath.value = null;
-      return;
-    }
-    this.otherPath.value = this.activePath.value;
-    this.split.value = true;
-    this.focus(1);
+    if (this.split.value) this.closeGroup();
+    else this.splitEditor();
+  }
+
+  /** Records the focused group's file in `groupPaths` before focus or the groups change. */
+  private syncFocused(): void {
+    const paths = [...this.groupPaths.value];
+    paths[this.focused.value] = this.activePath.value;
+    this.groupPaths.value = paths;
   }
 
   /** Settings → Editor → Behaviour → Auto-save. */
@@ -159,7 +197,7 @@ export class EditorDocuments {
     const remaining = this.tabOrder();
     const next = remaining[Math.max(0, index - 1)] ?? null;
     if (this.activePath.value === path) this.activePath.value = next;
-    if (this.otherPath.value === path) this.otherPath.value = next;
+    this.groupPaths.value = this.groupPaths.value.map((p, i) => (i !== this.focused.value && p === path ? next : p));
     this.reportDirty();
   }
 
@@ -174,7 +212,7 @@ export class EditorDocuments {
     this.docs.value = this.docs.value.map((d) => (isUnder(d.path, from) ? { ...d, path: move(d.path), name: baseName(move(d.path)) } : d));
     this.infos.value = this.infos.value.map((i) => (isUnder(i.path, from) ? { ...i, path: move(i.path), name: baseName(move(i.path)) } : i));
     if (this.activePath.value) this.activePath.value = move(this.activePath.value);
-    if (this.otherPath.value) this.otherPath.value = move(this.otherPath.value);
+    this.groupPaths.value = this.groupPaths.value.map((p) => (p ? move(p) : p));
   }
 
   setText(path: string, text: string): void {

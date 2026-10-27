@@ -1,7 +1,7 @@
-import type { ChildProcess } from 'node:child_process';
+import { execFile, type ChildProcess } from 'node:child_process';
 import { basename } from 'node:path';
 import type { MessageKind } from '@shared/modules';
-import type { DebugFrame, DebugScope, DebugState, DebugVariable } from '@shared/types';
+import type { Breakpoint, DebugFrame, DebugScope, DebugState, DebugVariable, DebugWatch } from '@shared/types';
 import type { BreakpointStore } from '../Store/BreakpointStore';
 import type { InstalledLanguage } from './CodeModuleService';
 import { fillSettings, spawnModuleProcess } from './LanguageServerService';
@@ -125,11 +125,17 @@ function terminalCommand(args: { cwd?: string; args: string[]; env?: Record<stri
   return `${args.cwd ? `cd ${shellQuote(args.cwd)} && ` : ''}${assigns}${program}`;
 }
 
-const IDLE: DebugState = { state: 'idle', frames: [], scopes: [] };
+const IDLE: DebugState = { state: 'idle', frames: [], scopes: [], threads: [], watches: [] };
 
-/** Replaces ${file}, ${project} and ${setting:<id>} in every string of a launch configuration. */
-function fillLaunch(value: unknown, vars: { file: string; project: string }, owner: InstalledLanguage): unknown {
-  if (typeof value === 'string') return fillSettings(owner, value.replace(/\$\{file\}/g, vars.file).replace(/\$\{project\}/g, vars.project));
+/**
+ * Replaces ${file}, ${project}, ${processId} and ${setting:<id>} in every string of launch or attach
+ * arguments. A string that is exactly "${processId}" becomes the number.
+ */
+function fillLaunch(value: unknown, vars: { file: string; project: string; processId: string }, owner: InstalledLanguage): unknown {
+  if (value === '${processId}' && vars.processId) return Number(vars.processId);
+  if (typeof value === 'string') {
+    return fillSettings(owner, value.replace(/\$\{file\}/g, vars.file).replace(/\$\{project\}/g, vars.project).replace(/\$\{processId\}/g, vars.processId));
+  }
   if (Array.isArray(value)) return value.map((v) => fillLaunch(v, vars, owner));
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, fillLaunch(v, vars, owner)]));
   return value;
@@ -142,6 +148,7 @@ function fillLaunch(value: unknown, vars: { file: string; project: string }, own
 export class DebugService {
   private readonly sessions = new Map<string, Session>();
   private modules: InstalledLanguage[] = [];
+  private readonly watchLists = new Map<string, string[]>();
 
   constructor(private readonly breakpoints: BreakpointStore, private readonly events: DebugEvents) {}
 
@@ -153,28 +160,62 @@ export class DebugService {
     return this.sessions.get(projectPath)?.state ?? IDLE;
   }
 
-  breakpointsFor(projectPath: string): Promise<Record<string, number[]>> {
+  breakpointsFor(projectPath: string): Promise<Record<string, Breakpoint[]>> {
     return this.breakpoints.forProject(projectPath);
   }
 
-  async setBreakpoints(projectPath: string, path: string, lines: number[]): Promise<void> {
-    await this.breakpoints.set(projectPath, path, lines);
+  async setBreakpoints(projectPath: string, path: string, list: Breakpoint[]): Promise<void> {
+    await this.breakpoints.set(projectPath, path, list);
     const session = this.sessions.get(projectPath);
-    if (session?.configured) await this.sendBreakpoints(session, path, lines).catch(() => undefined);
+    if (session?.configured) await this.sendBreakpoints(session, path, list).catch(() => undefined);
   }
 
-  /** Starts debugging a file with its language's debugger (stopping any session already running). */
-  async start(projectPath: string, req: { path: string; languageId: string }): Promise<void> {
+  /** Watch expressions, per project; re-evaluated whenever the program pauses or another frame is picked. */
+  async setWatches(projectPath: string, expressions: string[]): Promise<void> {
+    this.watchLists.set(projectPath, expressions);
+    const session = this.sessions.get(projectPath);
+    if (!session) return;
+    session.state = { ...session.state, watches: await this.evaluateWatches(projectPath, session) };
+    this.publish(projectPath, session);
+  }
+
+  /** Running processes to attach to (pid and name), most recent first. */
+  async processes(): Promise<{ pid: number; name: string }[]> {
+    const out = await new Promise<string>((resolve) => {
+      if (process.platform === 'win32') execFile('tasklist', ['/fo', 'csv', '/nh'], (_e, stdout) => resolve(stdout ?? ''));
+      else execFile('ps', ['-axo', 'pid=,comm='], (_e, stdout) => resolve(stdout ?? ''));
+    });
+    const list = out.split(/\r?\n/).map((line) => {
+      if (process.platform === 'win32') {
+        const [name, pid] = line.split('","').map((s) => s.replace(/"/g, ''));
+        return { pid: Number(pid), name: name ?? '' };
+      }
+      const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+      return { pid: Number(match?.[1]), name: (match?.[2] ?? '').split('/').pop() ?? '' };
+    });
+    return list.filter((p) => p.pid > 0 && p.pid !== process.pid && p.name).reverse();
+  }
+
+  /**
+   * Starts debugging with the language's debugger (stopping any session already running): the file
+   * with the default launch arguments or a named configuration, or (with `processId`) attaching to a
+   * running process.
+   */
+  async start(projectPath: string, req: { path: string; languageId: string; configuration?: string; processId?: number }): Promise<void> {
     await this.stop(projectPath);
     const owner = this.modules.find((m) => m.manifest.contributes?.debugger?.languages.includes(req.languageId));
     const config = owner?.manifest.contributes?.debugger;
     if (!owner || !config) throw new Error(`There's no debugger for this file's language`);
+    if (req.processId !== undefined && !config.attach) throw new Error(`${config.label} can't attach to a running process`);
+    const chosen = req.configuration ? config.configurations?.find((c) => c.id === req.configuration) : undefined;
+    if (req.configuration && !chosen) throw new Error(`There's no ${req.configuration} configuration`);
+    const title = req.processId !== undefined ? `process ${req.processId}` : chosen ? chosen.label : basename(req.path);
 
     const { child, command } = spawnModuleProcess(owner, config, projectPath);
     const session: Session = {
       child,
       configured: false,
-      state: { state: 'starting', name: `${basename(req.path)} (${config.label})`, frames: [], scopes: [] },
+      state: { state: 'starting', name: `${title} (${config.label})`, frames: [], scopes: [], threads: [], watches: [] },
       connection: new DapConnection(child, (event, body) => void this.onEvent(projectPath, session, event, body), async (command, args) => {
         if (command !== 'runInTerminal') throw new Error('Not supported by Saturn');
         this.events.runInTerminal(projectPath, args.title || session.state.name || 'Debug', terminalCommand(args));
@@ -195,7 +236,9 @@ export class DebugService {
       });
       session.state = { ...session.state, state: 'running' };
       this.publish(projectPath, session);
-      await session.connection.request('launch', fillLaunch(config.launch, { file: req.path, project: projectPath }, owner));
+      const vars = { file: req.path, project: projectPath, processId: String(req.processId ?? '') };
+      if (req.processId !== undefined) await session.connection.request('attach', fillLaunch(config.attach, vars, owner));
+      else await session.connection.request('launch', fillLaunch(chosen?.launch ?? config.launch, vars, owner));
     } catch (e) {
       this.end(projectPath, session, `Couldn't start debugging: ${(e as Error).message}`);
     }
@@ -222,18 +265,27 @@ export class DebugService {
     const threadId = session.threadId ?? (await this.firstThread(session));
     if (threadId === undefined) return;
     if (action !== 'pause') {
-      session.state = { ...session.state, state: 'running', reason: undefined, frames: [], scopes: [], frameId: undefined };
+      session.state = { ...session.state, state: 'running', reason: undefined, frames: [], scopes: [], frameId: undefined, threads: [] };
       this.publish(projectPath, session);
     }
     await session.connection.request(action, { threadId }).catch((e: Error) => this.events.message(projectPath, e.message, 'error'));
   }
 
-  /** Shows another frame of the paused stack: its variables. */
+  /** Shows another frame of the paused stack: its variables and watches. */
   async selectFrame(projectPath: string, frameId: number): Promise<void> {
     const session = this.sessions.get(projectPath);
     if (!session || session.state.state !== 'stopped') return;
     session.state = { ...session.state, frameId, scopes: await this.scopes(session, frameId) };
+    session.state = { ...session.state, watches: await this.evaluateWatches(projectPath, session) };
     this.publish(projectPath, session);
+  }
+
+  /** Shows another thread of the paused program: its stack, top frame selected. */
+  async selectThread(projectPath: string, threadId: number): Promise<void> {
+    const session = this.sessions.get(projectPath);
+    if (!session || session.state.state !== 'stopped') return;
+    session.threadId = threadId;
+    await this.showThread(projectPath, session);
   }
 
   /** A variable's children. */
@@ -264,14 +316,12 @@ export class DebugService {
       }
       case 'stopped': {
         session.threadId = body.threadId ?? session.threadId ?? (await this.firstThread(session));
-        const frames = session.threadId === undefined ? [] : await this.frames(session, session.threadId);
-        const frameId = frames[0]?.id;
-        session.state = { ...session.state, state: 'stopped', reason: body.reason, frames, frameId, scopes: frameId === undefined ? [] : await this.scopes(session, frameId) };
-        this.publish(projectPath, session);
+        session.state = { ...session.state, state: 'stopped', reason: body.reason };
+        await this.showThread(projectPath, session);
         break;
       }
       case 'continued':
-        session.state = { ...session.state, state: 'running', reason: undefined, frames: [], scopes: [], frameId: undefined };
+        session.state = { ...session.state, state: 'running', reason: undefined, frames: [], scopes: [], frameId: undefined, threads: [] };
         this.publish(projectPath, session);
         break;
       case 'output':
@@ -285,8 +335,35 @@ export class DebugService {
     }
   }
 
-  private sendBreakpoints(session: Session, path: string, lines: number[]): Promise<unknown> {
-    return session.connection.request('setBreakpoints', { source: { path, name: basename(path) }, breakpoints: lines.map((line) => ({ line })), lines });
+  private sendBreakpoints(session: Session, path: string, list: Breakpoint[]): Promise<unknown> {
+    return session.connection.request('setBreakpoints', {
+      source: { path, name: basename(path) },
+      breakpoints: list.map((b) => ({ line: b.line, ...(b.condition && { condition: b.condition }), ...(b.logMessage && { logMessage: b.logMessage }) })),
+      lines: list.map((b) => b.line),
+    });
+  }
+
+  /** The paused program's threads, the selected thread's stack (top frame selected), its variables and the watches. */
+  private async showThread(projectPath: string, session: Session): Promise<void> {
+    const threads = (await session.connection.request<{ threads: { id: number; name: string }[] }>('threads').catch(() => ({ threads: [] }))).threads;
+    const frames = session.threadId === undefined ? [] : await this.frames(session, session.threadId);
+    const frameId = frames[0]?.id;
+    session.state = { ...session.state, threads, threadId: session.threadId, frames, frameId, scopes: frameId === undefined ? [] : await this.scopes(session, frameId) };
+    session.state = { ...session.state, watches: await this.evaluateWatches(projectPath, session) };
+    this.publish(projectPath, session);
+  }
+
+  private async evaluateWatches(projectPath: string, session: Session): Promise<DebugWatch[]> {
+    const expressions = this.watchLists.get(projectPath) ?? [];
+    if (session.state.state !== 'stopped') return expressions.map((expression) => ({ expression }));
+    return Promise.all(expressions.map(async (expression) => {
+      try {
+        const body = await session.connection.request<{ result: string }>('evaluate', { expression, frameId: session.state.frameId, context: 'watch' });
+        return { expression, value: body.result };
+      } catch (e) {
+        return { expression, error: (e as Error).message };
+      }
+    }));
   }
 
   private async firstThread(session: Session): Promise<number | undefined> {

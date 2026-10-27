@@ -1,5 +1,5 @@
 import type {
-  AppFolder, AppInfo, AppSettings, DebugState, DebugVariable, DirEntry, GitCommit, GitRemote, GitStash, GitStatus, GitTag, WorkingDiff, UpdateStatus, FileReadResult, LayoutState, NewProjectRequest, RecentProject,
+  AppFolder, AppInfo, AppSettings, Breakpoint, DebugState, DebugVariable, DirEntry, GitCommit, GitRemote, GitStash, GitStatus, GitTag, WorkingDiff, UpdateStatus, FileReadResult, LayoutState, NewProjectRequest, RecentProject,
   RunEntry, Theme, ThemeMode, ThemeSummary, Unsubscribe, WindowKind,
 } from './types';
 import type {
@@ -51,6 +51,11 @@ export interface SaturnApi {
     hover(req: CompletionRequest): Promise<string | null>;
     /** Where the symbol at a position is defined, or null. */
     definition(req: CompletionRequest): Promise<SourceLocation | null>;
+    /** Languages picked for single files in this project: path → language id ("plain-text" for none). */
+    fileChoices(): Promise<Record<string, string>>;
+    /** Picks a file's language ("plain-text" for none), or (null) goes back to choosing by extension. */
+    setFileLanguage(path: string, languageId: string | null): Promise<void>;
+    onChoicesChanged(cb: (choices: Record<string, string>) => void): Unsubscribe;
     /** Everything defined in a file, nested, for the Outline panel. */
     symbols(req: DocumentRequest): Promise<DocumentSymbol[]>;
     /** Every usage of the symbol at a position, declaration included. */
@@ -105,11 +110,20 @@ export interface SaturnApi {
   /** Debugging this project (through a language module's debugger) and its breakpoints. */
   debug: {
     state(): Promise<DebugState>;
-    /** File path → 1-based breakpoint lines. */
-    breakpoints(): Promise<Record<string, number[]>>;
-    setBreakpoints(path: string, lines: number[]): Promise<void>;
-    /** Debugs a file with its language's debugger; rejects if the language has none. */
-    start(req: { path: string; languageId: string }): Promise<void>;
+    /** File path → breakpoints (with any condition or log message). */
+    breakpoints(): Promise<Record<string, Breakpoint[]>>;
+    setBreakpoints(path: string, list: Breakpoint[]): Promise<void>;
+    /**
+     * Debugs a file with its language's debugger (a named `configuration`, else the default launch), or
+     * attaches to a running process (`processId`); rejects if the language has no debugger.
+     */
+    start(req: { path: string; languageId: string; configuration?: string; processId?: number }): Promise<void>;
+    /** Running processes to attach to. */
+    processes(): Promise<{ pid: number; name: string }[]>;
+    /** Sets the watch expressions; they're evaluated whenever the program pauses. */
+    setWatches(expressions: string[]): Promise<void>;
+    /** Shows another thread's stack while paused. */
+    selectThread(threadId: number): Promise<void>;
     stop(): Promise<void>;
     continue(): Promise<void>;
     /** Step over. */
@@ -229,6 +243,8 @@ export interface SaturnApi {
     removeRecent(path: string): Promise<void>;
     /** Moves a recent project's folder to the Trash and forgets it (callers confirm first). Rejects while it's open. */
     deleteProject(path: string): Promise<void>;
+    /** Makes a language a recent project's main one (its icon, and what New Project-style features treat it as). */
+    setLanguage(path: string, languageId: string): Promise<void>;
     pickFolder(): Promise<string | null>;
     pickFile(): Promise<string | null>;
     /** Clones a repository into a new folder inside `parentDir`, then opens it. */

@@ -43,6 +43,13 @@ export class RecentProjectsStore {
     });
   }
 
+  /** Makes a language the project's main one (its icon on the Welcome list), keeping its place in the list. */
+  async setLanguage(path: string, languageId: string): Promise<void> {
+    await this.store.update((list) => list.map((p) => (samePath(p.path, path)
+      ? { ...p, languageIds: [languageId, ...p.languageIds.filter((id) => id !== languageId)] }
+      : p)));
+  }
+
   async remove(path: string): Promise<void> {
     await this.store.update((list) => list.filter((p) => !samePath(p.path, path)));
   }

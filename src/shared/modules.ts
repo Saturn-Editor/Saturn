@@ -57,6 +57,10 @@ export interface ManifestDebugger {
    * project folder, and "${setting:<id>}" a module setting.
    */
   launch: Record<string, unknown>;
+  /** More launch arguments to choose from in the Debug panel, e.g. "Tests" or "With arguments"; `launch` is the default. */
+  configurations?: { id: string; label: string; launch: Record<string, unknown> }[];
+  /** DAP attach arguments, for attaching to a running process; "${processId}" is the chosen process's id. */
+  attach?: Record<string, unknown>;
 }
 
 export interface ManifestPanel {
@@ -259,7 +263,7 @@ export interface ContributionSnapshot {
   /** Buttons on the editor's right-hand bar; `iconUrl` as for panels. */
   buttons: (ManifestButton & { moduleId: string; iconUrl: string | null })[];
   /** Languages that can be debugged, and with which module's debugger. */
-  debuggers: { moduleId: string; label: string; languages: string[] }[];
+  debuggers: { moduleId: string; label: string; languages: string[]; configurations: { id: string; label: string }[]; canAttach: boolean }[];
 }
 
 export type MessageKind = 'info' | 'warning' | 'error';

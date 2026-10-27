@@ -17,6 +17,7 @@ import { UpdateService } from './Services/UpdateService';
 import { DebugService } from './Services/DebugService';
 import { AskpassService } from './Services/AskpassService';
 import { TrashService } from './Services/TrashService';
+import { LanguageChoiceStore } from './Store/LanguageChoiceStore';
 import { setAskpass } from './Services/GitService';
 import { BreakpointStore } from './Store/BreakpointStore';
 import { CodeModuleService } from './Services/CodeModuleService';
@@ -182,6 +183,7 @@ export class SaturnApp {
       debug,
       askpass,
       trash,
+      languageChoices: new LanguageChoiceStore(paths.file('language-choices.json')),
       marketplace,
       reset: () => resetSaturn(),
     });

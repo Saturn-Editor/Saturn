@@ -94,6 +94,13 @@ export interface UpdateStatus {
   downloadUrl?: string;
 }
 
+/** A breakpoint on a 1-based line: it stops only when `condition` is true, and logs `logMessage` (with {expression} values) instead of stopping. */
+export interface Breakpoint {
+  line: number;
+  condition?: string;
+  logMessage?: string;
+}
+
 /** A stack frame of the paused program; `line` and `column` are 1-based, `path` null for code without a file. */
 export interface DebugFrame {
   id: number;
@@ -126,6 +133,18 @@ export interface DebugState {
   frames: DebugFrame[];
   frameId?: number;
   scopes: DebugScope[];
+  /** The paused program's threads, and the one whose stack is shown. */
+  threads: { id: number; name: string }[];
+  threadId?: number;
+  /** Watch expressions and their values in the selected frame (values only while paused). */
+  watches: DebugWatch[];
+}
+
+export interface DebugWatch {
+  expression: string;
+  value?: string;
+  /** Why it couldn't be evaluated, e.g. a name not in scope. */
+  error?: string;
 }
 
 /** Version and environment details for About → Diagnostics. */
@@ -157,6 +176,8 @@ export interface AppSettings {
   customKeymaps: CustomKeymap[];
   /** Typing an opening bracket or quote also inserts the closer. */
   autoCloseBrackets: boolean;
+  /** Which language opens a file extension several installed languages claim, by extension (e.g. ".h": "cpp"). */
+  extensionLanguages: Record<string, string>;
   /** Switching branches with uncommitted changes: ask each time, bring them to the new branch, or shelve them for the old one. */
   branchSwitch: BranchSwitchMode;
   /** Saving a file (Save File) formats it first with its language server, where the language supports it. */

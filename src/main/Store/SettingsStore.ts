@@ -27,6 +27,7 @@ export interface Settings {
   autoCloseBrackets?: boolean;
   formatOnSave?: boolean;
   branchSwitch?: 'ask' | 'bring' | 'shelve';
+  extensionLanguages?: Record<string, string>;
   textSize?: number;
   encoding?: FileEncoding;
   autoSave?: 'typing' | 'idle' | 'off';
@@ -67,6 +68,7 @@ export class SettingsStore {
       autoCloseBrackets: s.autoCloseBrackets ?? true,
       formatOnSave: s.formatOnSave ?? false,
       branchSwitch: s.branchSwitch ?? 'ask',
+      extensionLanguages: s.extensionLanguages ?? {},
       textSize: s.textSize ?? 100,
       encoding: s.encoding ?? 'utf-8',
       diagnostics: s.diagnostics ?? true,
@@ -113,6 +115,7 @@ export class SettingsStore {
       ...(change.autoCloseBrackets !== undefined && { autoCloseBrackets: change.autoCloseBrackets }),
       ...(change.formatOnSave !== undefined && { formatOnSave: change.formatOnSave }),
       ...(change.branchSwitch && ['ask', 'bring', 'shelve'].includes(change.branchSwitch) && { branchSwitch: change.branchSwitch }),
+      ...(change.extensionLanguages !== undefined && { extensionLanguages: change.extensionLanguages }),
       ...(change.textSize !== undefined && { textSize: change.textSize }),
       ...(change.encoding !== undefined && FILE_ENCODINGS.some((e) => e.id === change.encoding) && { encoding: change.encoding }),
       ...(change.diagnostics !== undefined && { diagnostics: change.diagnostics }),
