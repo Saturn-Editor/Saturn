@@ -4,7 +4,7 @@
  */
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
-import type { TreeItem } from '@shared/modules';
+import type { MessageKind, SettingValue, SettingValues, TreeItem } from '@shared/modules';
 import { Rpc } from '@shared/rpc';
 import { findFiles } from '../main/Helpers/findFiles';
 
@@ -17,13 +17,20 @@ export interface TemplateContext extends ModuleContext {
   dir: string;
 }
 
-/** The `saturn` object every module's `activate(saturn)` receives. */
+export interface TreeProvider {
+  getChildren(parentId: string | null, ctx: ModuleContext): TreeItem[] | Promise<TreeItem[]>;
+  /** Called when the user picks one of an item's `actions` from its right-click menu. */
+  onAction?(actionId: string, item: TreeItem, ctx: ModuleContext): void | Promise<void>;
+}
+
+/** The `saturn` object every module's `activate(saturn)` receives. A module may also export `deactivate()`, called before it unloads. */
 export interface SaturnModuleApi {
   platform: NodeJS.Platform;
   commands: { register(id: string, run: (ctx: ModuleContext) => void | Promise<void>): void };
   panels: {
-    registerTree(id: string, provider: { getChildren(parentId: string | null, ctx: ModuleContext): TreeItem[] | Promise<TreeItem[]> }): void;
-    refresh(id: string): void;
+    registerTree(id: string, provider: TreeProvider): void;
+    /** Reloads the whole tree, or only the children of `itemId`. */
+    refresh(id: string, itemId?: string): void;
   };
   previews: { registerRenderer(id: string, render: (text: string, ctx: ModuleContext & { path: string }) => string | Promise<string>): void };
   files: {
@@ -32,11 +39,27 @@ export interface SaturnModuleApi {
       content?(ctx: TemplateContext): string | Promise<string>;
     }): void;
   };
-  projects: { onCreate(handler: (ctx: ModuleContext & { fields: Record<string, string | boolean> }) => void | Promise<void>): void };
+  projects: {
+    onCreate(handler: (ctx: ModuleContext & { fields: Record<string, string | boolean> }) => void | Promise<void>): void;
+    /** A project's editor window closed; release anything held for it (watchers, caches). */
+    onDidClose(listener: (ctx: ModuleContext) => void): void;
+  };
   run: { registerProvider(provide: (ctx: ModuleContext) => { name: string; command: string }[] | Promise<{ name: string; command: string }[]>): void };
   workspace: {
     findFiles(projectPath: string, glob: string): Promise<string[]>;
-    openFile(projectPath: string, path: string, line?: number): void;
+    /** Opens a file in that project's editor window, at a 1-based line and column. */
+    openFile(projectPath: string, path: string, line?: number, column?: number): void;
+    /** Files changed inside an open project: `dir` is the folder whose contents changed (debounced). */
+    onDidChangeFiles(listener: (e: { projectPath: string; dir: string }) => void): void;
+  };
+  window: {
+    /** Shows a message in the status bar: of that project's window if given, otherwise every window. */
+    showMessage(message: string, options?: { kind?: MessageKind; projectPath?: string }): void;
+  };
+  /** This module's own settings (declared in `contributes.settings`, edited in its Settings tab). */
+  settings: {
+    get(id: string): SettingValue | undefined;
+    onChange(listener: (values: SettingValues) => void): void;
   };
 }
 
@@ -44,6 +67,7 @@ interface LoadedModule {
   id: string;
   dir: string;
   main?: string;
+  settings: SettingValues;
 }
 
 type Fn = (...args: any[]) => any;
@@ -51,18 +75,31 @@ type Fn = (...args: any[]) => any;
 class ExtensionHost {
   private readonly rpc = new Rpc((message) => process.parentPort.postMessage(message));
   private readonly commands = new Map<string, Fn>();
-  private readonly trees = new Map<string, { getChildren: Fn }>();
+  private readonly trees = new Map<string, TreeProvider>();
   private readonly previews = new Map<string, Fn>();
   private readonly templates = new Map<string, { fileName?: Fn; content?: Fn }>();
   private readonly projectHandlers = new Map<string, Fn>();
   private readonly runProviders = new Map<string, Fn>();
+  private readonly settings = new Map<string, SettingValues>();
+  /** Event listeners by event name, each tagged with its module for error messages. */
+  private readonly listeners = new Map<string, { moduleId: string; fn: Fn }[]>();
+  private readonly deactivators: { moduleId: string; fn: Fn }[] = [];
 
   start(): void {
     process.parentPort.on('message', (e) => this.rpc.receive(e.data));
     this.rpc.handle('activate', (modules: LoadedModule[]) => this.activateAll(modules));
+    this.rpc.handle('deactivate', () => this.deactivateAll());
+    this.rpc.handle('settingsChanged', (moduleId: string, values: SettingValues) => {
+      this.settings.set(moduleId, values);
+      this.emit(`settings:${moduleId}`, values);
+    });
+    this.rpc.handle('filesChanged', (projectPath: string, dir: string) => this.emit('filesChanged', { projectPath, dir }));
+    this.rpc.handle('projectClosed', (projectPath: string) => this.emit('projectClosed', { projectPath }));
     this.rpc.handle('runCommand', (id: string, ctx: ModuleContext) => this.need(this.commands, id, 'command')(ctx));
     this.rpc.handle('treeChildren', (id: string, parentId: string | null, ctx: ModuleContext) =>
       this.need(this.trees, id, 'panel').getChildren(parentId, ctx));
+    this.rpc.handle('treeAction', (id: string, actionId: string, item: TreeItem, ctx: ModuleContext) =>
+      this.need(this.trees, id, 'panel').onAction?.(actionId, item, ctx));
     this.rpc.handle('renderPreview', (id: string, text: string, ctx: ModuleContext & { path: string }) =>
       this.need(this.previews, id, 'preview')(text, ctx));
     this.rpc.handle('templateFile', async (id: string, ctx: TemplateContext) => {
@@ -87,15 +124,42 @@ class ExtensionHost {
   private async activateAll(modules: LoadedModule[]): Promise<{ id: string; error: string }[]> {
     const failures: { id: string; error: string }[] = [];
     for (const m of modules) {
+      this.settings.set(m.id, m.settings);
       if (!m.main) continue;
       try {
         const mod = await import(/* @vite-ignore */ pathToFileURL(join(m.dir, m.main)).href);
         await mod.activate?.(this.apiFor(m.id));
+        if (typeof mod.deactivate === 'function') this.deactivators.push({ moduleId: m.id, fn: mod.deactivate });
       } catch (e) {
         failures.push({ id: m.id, error: e instanceof Error ? e.message : String(e) });
       }
     }
     return failures;
+  }
+
+  /** Runs every module's `deactivate()` before the host stops; one failing doesn't stop the rest. */
+  private async deactivateAll(): Promise<void> {
+    for (const { moduleId, fn } of this.deactivators) {
+      try {
+        await fn();
+      } catch (e) {
+        console.error(`[${moduleId}] deactivate failed`, e);
+      }
+    }
+  }
+
+  private on(event: string, moduleId: string, fn: Fn): void {
+    this.listeners.set(event, [...(this.listeners.get(event) ?? []), { moduleId, fn }]);
+  }
+
+  private emit(event: string, payload: unknown): void {
+    for (const { moduleId, fn } of this.listeners.get(event) ?? []) {
+      try {
+        void Promise.resolve(fn(payload)).catch((e) => console.error(`[${moduleId}] ${event} listener failed`, e));
+      } catch (e) {
+        console.error(`[${moduleId}] ${event} listener failed`, e);
+      }
+    }
   }
 
   private apiFor(moduleId: string): SaturnModuleApi {
@@ -104,15 +168,26 @@ class ExtensionHost {
       commands: { register: (id, run) => void this.commands.set(id, run) },
       panels: {
         registerTree: (id, provider) => void this.trees.set(id, provider),
-        refresh: (id) => this.rpc.notify('refreshPanel', id),
+        refresh: (id, itemId) => this.rpc.notify('refreshPanel', id, itemId),
       },
       previews: { registerRenderer: (id, render) => void this.previews.set(id, render) },
       files: { registerTemplate: (id, template) => void this.templates.set(id, template) },
-      projects: { onCreate: (handler) => void this.projectHandlers.set(moduleId, handler) },
+      projects: {
+        onCreate: (handler) => void this.projectHandlers.set(moduleId, handler),
+        onDidClose: (listener) => this.on('projectClosed', moduleId, listener),
+      },
       run: { registerProvider: (provide) => void this.runProviders.set(moduleId, provide) },
       workspace: {
         findFiles: (projectPath, glob) => findFiles(projectPath, glob),
-        openFile: (projectPath, path, line) => this.rpc.notify('openFile', projectPath, path, line),
+        openFile: (projectPath, path, line, column) => this.rpc.notify('openFile', projectPath, path, line, column),
+        onDidChangeFiles: (listener) => this.on('filesChanged', moduleId, listener),
+      },
+      window: {
+        showMessage: (message, options) => this.rpc.notify('showMessage', { message, kind: options?.kind ?? 'info', projectPath: options?.projectPath, moduleId }),
+      },
+      settings: {
+        get: (id) => this.settings.get(moduleId)?.[id],
+        onChange: (listener) => this.on(`settings:${moduleId}`, moduleId, listener),
       },
     };
   }

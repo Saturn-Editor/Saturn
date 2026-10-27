@@ -1,16 +1,20 @@
 import { join } from 'node:path';
 import { utilityProcess, type UtilityProcess } from 'electron';
-import type { TreeItem } from '@shared/modules';
+import type { ModuleMessage, SettingValues, TreeItem } from '@shared/modules';
 import { Rpc } from '@shared/rpc';
 import type { InstalledModule } from './ModuleService';
 
 export interface HostEvents {
-  openFile(projectPath: string, path: string, line?: number): void;
-  refreshPanel(panelId: string): void;
+  openFile(projectPath: string, path: string, line?: number, column?: number): void;
+  refreshPanel(panelId: string, itemId?: string): void;
+  showMessage(message: ModuleMessage): void;
   crashed(reason: string): void;
 }
 
 type Ctx = { projectPath: string };
+
+/** How long modules get to run `deactivate()` before the host is stopped anyway. */
+const DEACTIVATE_TIMEOUT_MS = 1500;
 
 /** Runs the extension host process and forwards calls to the modules loaded in it. */
 export class ExtensionHostService {
@@ -20,13 +24,26 @@ export class ExtensionHostService {
 
   constructor(private readonly events: HostEvents) {}
 
-  /** (Re)starts the host with the given modules. Calls made meanwhile wait for activation. */
-  restart(modules: InstalledModule[]): Promise<void> {
-    this.stop();
+  /** (Re)starts the host with the given modules, letting the old ones deactivate first. Calls made meanwhile wait for activation. */
+  async restart(modules: InstalledModule[]): Promise<void> {
+    let starting!: () => void;
+    const previous = this.ready;
+    this.ready = new Promise<void>((resolve) => (starting = resolve));
+    await previous.catch(() => undefined);
+    try {
+      await this.start(modules);
+    } finally {
+      starting();
+    }
+  }
+
+  private async start(modules: InstalledModule[]): Promise<void> {
+    await this.shutdown();
     const child = utilityProcess.fork(join(import.meta.dirname, 'host.js'), [], { serviceName: 'Saturn Extension Host' });
     const rpc = new Rpc((message) => child.postMessage(message));
-    rpc.handle('openFile', (projectPath: string, path: string, line?: number) => this.events.openFile(projectPath, path, line));
-    rpc.handle('refreshPanel', (panelId: string) => this.events.refreshPanel(panelId));
+    rpc.handle('openFile', (projectPath: string, path: string, line?: number, column?: number) => this.events.openFile(projectPath, path, line, column));
+    rpc.handle('refreshPanel', (panelId: string, itemId?: string) => this.events.refreshPanel(panelId, itemId));
+    rpc.handle('showMessage', (message: ModuleMessage) => this.events.showMessage(message));
     child.on('message', (message) => rpc.receive(message));
     child.on('exit', (code) => {
       rpc.rejectAll('The extension host stopped');
@@ -38,11 +55,18 @@ export class ExtensionHostService {
     });
     this.child = child;
     this.rpc = rpc;
-    const loadable = modules.map((m) => ({ id: m.manifest.id, dir: m.dir, main: m.manifest.main }));
-    this.ready = rpc.call<{ id: string; error: string }[]>('activate', loadable).then((failures) => {
-      for (const f of failures) console.error(`Module ${f.id} failed to activate: ${f.error}`);
-    });
-    return this.ready;
+    const loadable = modules.map((m) => ({ id: m.manifest.id, dir: m.dir, main: m.manifest.main, settings: m.settings }));
+    await rpc.call<{ id: string; error: string }[]>('activate', loadable).then(
+      (failures) => failures.forEach((f) => console.error(`Module ${f.id} failed to activate: ${f.error}`)),
+      (e) => console.error('Extension host failed to activate modules', e),
+    );
+  }
+
+  /** Asks modules to `deactivate()` (waiting a moment at most), then stops the host. */
+  async shutdown(): Promise<void> {
+    const rpc = this.rpc;
+    if (rpc) await Promise.race([rpc.call('deactivate').catch(() => undefined), new Promise((r) => setTimeout(r, DEACTIVATE_TIMEOUT_MS))]);
+    this.stop();
   }
 
   stop(): void {
@@ -51,6 +75,25 @@ export class ExtensionHostService {
     this.rpc?.rejectAll('The extension host restarted');
     this.rpc = null;
     child?.kill();
+  }
+
+  /** Passes a module's new setting values to it (modules listen with `saturn.settings.onChange`). */
+  settingsChanged(moduleId: string, values: SettingValues): void {
+    void this.ready.then(() => this.rpc?.notify('settingsChanged', moduleId, values));
+  }
+
+  /** Files changed in an open project (modules listen with `saturn.workspace.onDidChangeFiles`). */
+  filesChanged(projectPath: string, dir: string): void {
+    void this.ready.then(() => this.rpc?.notify('filesChanged', projectPath, dir));
+  }
+
+  /** A project's editor window closed (modules listen with `saturn.projects.onDidClose`). */
+  projectClosed(projectPath: string): void {
+    void this.ready.then(() => this.rpc?.notify('projectClosed', projectPath));
+  }
+
+  treeAction(panelId: string, actionId: string, item: TreeItem, ctx: Ctx): Promise<void> {
+    return this.call('treeAction', panelId, actionId, item, ctx);
   }
 
   runCommand(id: string, ctx: Ctx): Promise<void> {

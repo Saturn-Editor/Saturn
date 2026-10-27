@@ -2,7 +2,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { GearIcon, IconButton, LanguageBadges } from '@renderer/components';
 import { ActionSearch } from '@renderer/commands/ActionSearch';
 import { projectBadges } from '@renderer/modules/ModuleBridge';
-import { RunMenu } from '@renderer/run/RunMenu';
+import { RunMenu } from '@renderer/screens/editor/RunMenu';
 import { useWorkspace } from './EditorWorkspace';
 
 export function TopBar() {

@@ -1,9 +1,11 @@
 import { cp, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
-  SATURN_API_VERSION, satisfiesCaret, type ContributionSnapshot, type ModuleManifest, type ModuleSummary,
+  SATURN_API_VERSION, satisfiesCaret, settingDefaults, type ContributionSnapshot, type ModuleManifest, type ModuleSummary,
+  type SettingValue, type SettingValues,
 } from '@shared/modules';
 import { findFiles } from '../Helpers/findFiles';
+import type { ModuleSettingsStore } from '../Store/ModuleSettingsStore';
 import type { ModuleStateStore } from '../Store/ModuleStateStore';
 
 export const MANIFEST_FILE = 'saturn-module.json';
@@ -13,6 +15,8 @@ export interface InstalledModule {
   dir: string;
   enabled: boolean;
   incompatible: string | null;
+  /** Its contributed settings' values (stored, else the manifest defaults). */
+  settings: SettingValues;
 }
 
 const ID = /^[a-z0-9][a-z0-9.-]*$/;
@@ -20,8 +24,13 @@ const ID = /^[a-z0-9][a-z0-9.-]*$/;
 /** Reads, installs, enables and removes language modules kept in `<appData>/modules/<id>/`. */
 export class ModuleService {
   private readonly listeners: (() => void)[] = [];
+  private readonly settingsListeners: ((moduleId: string, values: SettingValues) => void)[] = [];
 
-  constructor(private readonly modulesDir: string, private readonly state: ModuleStateStore) {}
+  constructor(
+    private readonly modulesDir: string,
+    private readonly state: ModuleStateStore,
+    private readonly settingsStore: ModuleSettingsStore,
+  ) {}
 
   static validate(v: unknown): v is ModuleManifest {
     const m = v as ModuleManifest;
@@ -50,7 +59,8 @@ export class ModuleService {
       const incompatible = satisfiesCaret(manifest.saturnApi, SATURN_API_VERSION)
         ? null
         : `Needs Saturn API ${manifest.saturnApi}; this version provides ${SATURN_API_VERSION}`;
-      modules.push({ manifest, dir, enabled: !disabled.has(manifest.id), incompatible });
+      const settings = await this.valuesFor(manifest);
+      modules.push({ manifest, dir, enabled: !disabled.has(manifest.id), incompatible, settings });
     }
     return modules;
   }
@@ -91,7 +101,38 @@ export class ModuleService {
     if (!ID.test(id)) throw new Error(`Unknown module: ${id}`);
     await rm(join(this.modulesDir, id), { recursive: true, force: true });
     await this.state.forget(id);
+    await this.settingsStore.forget(id);
     this.emit();
+  }
+
+  /** Called when one module's settings change (no restart; the host and its language server are told). */
+  onSettingsChanged(listener: (moduleId: string, values: SettingValues) => void): void {
+    this.settingsListeners.push(listener);
+  }
+
+  async settings(moduleId: string): Promise<SettingValues> {
+    const found = (await this.list()).find((m) => m.manifest.id === moduleId);
+    if (!found) throw new Error(`Unknown module: ${moduleId}`);
+    return found.settings;
+  }
+
+  /** Saves one value; it must be a setting the module declares, with a matching type. */
+  async setSetting(moduleId: string, id: string, value: SettingValue): Promise<void> {
+    const found = (await this.list()).find((m) => m.manifest.id === moduleId);
+    const setting = found?.manifest.contributes?.settings?.find((s) => s.id === id);
+    if (!found || !setting) throw new Error(`Unknown setting: ${moduleId}.${id}`);
+    if ((setting.type === 'checkbox') !== (typeof value === 'boolean')) throw new Error(`Wrong value type for ${setting.label}`);
+    await this.settingsStore.set(moduleId, id, value);
+    const values = await this.valuesFor(found.manifest);
+    this.settingsListeners.forEach((l) => l(moduleId, values));
+  }
+
+  private async valuesFor(manifest: ModuleManifest): Promise<SettingValues> {
+    const declared = manifest.contributes?.settings ?? [];
+    const stored = await this.settingsStore.values(manifest.id);
+    const values = settingDefaults(declared);
+    for (const s of declared) if (stored[s.id] !== undefined) values[s.id] = stored[s.id];
+    return values;
   }
 
   async setEnabled(id: string, enabled: boolean): Promise<void> {
@@ -100,7 +141,7 @@ export class ModuleService {
   }
 
   async snapshot(): Promise<ContributionSnapshot> {
-    const snap: ContributionSnapshot = { languages: [], panels: [], commands: [], previews: [], fileTemplates: [], newProject: [] };
+    const snap: ContributionSnapshot = { languages: [], panels: [], commands: [], previews: [], fileTemplates: [], newProject: [], settings: [] };
     for (const { manifest: m } of await this.active()) {
       const c = m.contributes ?? {};
       const badge = m.badge ?? m.name.slice(0, 2).toUpperCase();
@@ -110,6 +151,7 @@ export class ModuleService {
       snap.commands.push(...(c.commands ?? []).map((cmd) => ({ ...cmd, moduleId: m.id, moduleName: m.name, badge })));
       snap.previews.push(...(c.previews ?? []).map((p) => ({ ...p, moduleId: m.id })));
       snap.fileTemplates.push(...(c.fileTemplates ?? []).map((t) => ({ ...t, moduleId: m.id })));
+      if (c.settings?.length) snap.settings.push({ moduleId: m.id, moduleName: m.name, badge, items: c.settings });
       if (c.newProject) {
         const languageName = c.languages?.find((l) => l.id === c.newProject!.language)?.name ?? m.name;
         snap.newProject.push({ ...c.newProject, moduleId: m.id, languageName, badge });

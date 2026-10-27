@@ -2,8 +2,9 @@ import { signal } from '@preact/signals';
 import { createContext } from 'preact';
 import { useContext } from 'preact/hooks';
 import type { SaturnApi } from '@shared/api';
+import type { MessageKind } from '@shared/modules';
 import { FileIcon, FolderIcon, TerminalIcon } from '@renderer/components';
-import { FileTemplateRegistry, templateFileName } from '@renderer/files/FileTemplateRegistry';
+import { FileTemplateRegistry, templateFileName } from '@renderer/editor/FileTemplateRegistry';
 import { CommandRegistry } from '@renderer/commands/CommandRegistry';
 import { EditorDocuments } from '@renderer/editor/EditorDocuments';
 import { DockLayoutModel } from '@renderer/panels/DockLayoutModel';
@@ -12,11 +13,9 @@ import { PreviewRegistry } from '@renderer/preview/PreviewRegistry';
 import { ModuleBridge } from '@renderer/modules/ModuleBridge';
 import { ProjectPanel } from '@renderer/panels/builtin/ProjectPanel';
 import { TerminalPanel } from '@renderer/panels/builtin/TerminalPanel';
-import { TerminalController } from '@renderer/terminal/TerminalController';
+import { TerminalController } from '@renderer/panels/builtin/TerminalController';
 
 const SAVE_DELAY_MS = 300;
-const isMac = navigator.userAgent.includes('Mac');
-export const MOD = isMac ? '⌘' : 'Ctrl+';
 
 /** Everything one editor window owns: panels, layout, open files, terminals and commands. */
 export class EditorWorkspace {
@@ -29,7 +28,8 @@ export class EditorWorkspace {
   /** "<line>:<column>" of the active editor's cursor, shown in the status bar. */
   readonly cursor = signal('1:1');
   /** A message for the status bar, e.g. when the extension host stops. */
-  readonly notice = signal<string | null>(null);
+  /** A message in the status bar (from a module, or a problem); click to dismiss. */
+  readonly notice = signal<{ text: string; kind: MessageKind } | null>(null);
   readonly modules = new ModuleBridge(this);
   layout!: DockLayoutModel;
   private saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -113,14 +113,16 @@ export class EditorWorkspace {
 
   private registerBuiltInCommands(): void {
     const source = { id: 'core', label: 'Saturn' } as const;
-    const add = (id: string, title: string, run: () => void | Promise<void>, shortcut?: string) =>
-      this.commands.register({ id: `core.${id}`, title, source, run, shortcut });
+    // Shortcuts come from the chosen keymap (shared/keymaps.ts), matched by command id.
+    const add = (id: string, title: string, run: () => void | Promise<void>) =>
+      this.commands.register({ id: `core.${id}`, title, source, run });
 
     add('openSettings', 'Open Settings', () => this.api.windows.openSettings());
     add('openMarketplace', 'Open Marketplace', () => this.api.windows.openMarketplace());
     add('toggleTerminal', 'Toggle Terminal', () => this.layout.toggle('terminal'));
     add('toggleProject', 'Toggle Project', () => this.layout.toggle('project'));
-    add('saveFile', 'Save File', () => this.documents.save(), `${MOD}S`);
+    add('saveFile', 'Save File', () => this.documents.save());
+    add('saveAll', 'Save All', () => this.documents.saveAll());
     add('newTerminal', 'New Terminal', async () => {
       await this.terminals.openTerminal();
       this.showTerminal();

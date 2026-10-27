@@ -2,8 +2,8 @@ import { useEffect, useRef } from 'preact/hooks';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal, type ITheme } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
-import { IconButton, PlusIcon, Tabs } from '@renderer/components';
-import type { TerminalController } from '@renderer/terminal/TerminalController';
+import { IconButton, PlusIcon, TabMenu } from '@renderer/components';
+import type { TerminalController } from '@renderer/panels/builtin/TerminalController';
 import { tokenRgba } from '@renderer/theme/ThemeApplier';
 
 /** Builds the xterm colour theme from the active Saturn theme's CSS variables. */
@@ -58,7 +58,7 @@ export function TerminalPanel({ controller }: { controller: TerminalController }
 
   return (
     <div class="flex flex-col h-full">
-      <Tabs
+      <TabMenu
         tabs={tabs.map((t) => ({ id: t.id, label: t.exited ? `${t.name} (exited)` : t.name, closable: true }))}
         active={active}
         onSelect={(id) => (controller.activeId.value = id)}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { DockId } from '@shared/types';
-import { IconButton, Menu, MoreIcon } from '@renderer/components';
+import { ContextMenu, IconButton, MoreIcon } from '@renderer/components';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
 import { fitStrip } from './fitStrip';
 
@@ -16,6 +16,7 @@ export function IconStrip() {
   const ref = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(0);
   const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     const el = ref.current!;
@@ -60,20 +61,20 @@ export function IconStrip() {
       </div>
       <div class="flex-1 w-full" style={{ minHeight: `${GAP_PX}px` }} />
       {fit.overflow && (
-        <IconButton icon={<MoreIcon />} label="More panels" onClick={() => setMoreOpen(!moreOpen)} />
+        <span ref={moreRef}>
+          <IconButton icon={<MoreIcon />} label="More panels" onClick={() => setMoreOpen(!moreOpen)} />
+        </span>
       )}
       <div class="flex flex-col items-center gap-1" data-testid="strip-bottom" {...dropZone('bottom', docks.bottom.panels.length)}>
         {bottom.map((id) => icon(id, 'bottom'))}
       </div>
       {moreOpen && fit.overflow && (
-        <Menu
+        <ContextMenu
           class="left-9 bottom-2 w-48"
-          selectedIndex={-1}
+          anchor={moreRef}
           items={hidden.map((id) => ({ id, label: ws.panels.get(id)?.title ?? id, icon: ws.panels.get(id)?.icon }))}
-          onPick={(id) => {
-            setMoreOpen(false);
-            ws.layout.show(id);
-          }}
+          onPick={(id) => ws.layout.show(id)}
+          onClose={() => setMoreOpen(false)}
         />
       )}
     </div>

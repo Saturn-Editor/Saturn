@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Badge, Menu, TextInput } from '@renderer/components';
-import { MOD, useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
+import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
+import { shortcutFor } from './keymap';
 
 /** The search box in the top bar: finds and runs any registered command. */
 export function ActionSearch() {
@@ -11,17 +12,17 @@ export function ActionSearch() {
   const [open, setOpen] = useState(false);
   const [index, setIndex] = useState(0);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'a') {
-        e.preventDefault();
-        input.current?.focus();
-        setOpen(true);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  // A command, so the keymap can bind it (⌘⇧A, Ctrl+Q, ⌘⇧P…).
+  useEffect(() => ws.commands.register({
+    id: 'core.searchActions',
+    title: 'Search Actions',
+    source: { id: 'core', label: 'Saturn' },
+    run: () => {
+      input.current?.focus();
+      setOpen(true);
+    },
+  }), []);
+  const searchShortcut = shortcutFor('core.searchActions');
 
   const results = ws.commands.search(query, 12);
 
@@ -52,7 +53,7 @@ export function ActionSearch() {
         class="w-full"
         inputRef={input}
         value={query}
-        placeholder={`Search actions  ${MOD}${MOD.endsWith('+') ? 'Shift+' : '⇧'}A`}
+        placeholder={searchShortcut ? `Search actions  ${searchShortcut}` : 'Search actions'}
         testId="action-search"
         onInput={(v) => {
           setQuery(v);
@@ -69,12 +70,15 @@ export function ActionSearch() {
           selectedIndex={index}
           onHover={setIndex}
           onPick={runCommand}
-          items={results.map((c) => ({
-            id: c.id,
-            label: c.title,
-            icon: c.source.icon ?? <Badge text={c.source.label.slice(0, 2)} />,
-            hint: c.shortcut ? `${c.source.label} · ${c.shortcut}` : c.source.label,
-          }))}
+          items={results.map((c) => {
+            const shortcut = shortcutFor(c.id);
+            return {
+              id: c.id,
+              label: c.title,
+              icon: c.source.icon ?? <Badge text={c.source.label.slice(0, 2)} />,
+              hint: shortcut ? `${c.source.label} · ${shortcut}` : c.source.label,
+            };
+          })}
         />
       )}
     </div>

@@ -1,17 +1,25 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { TreeItem } from '@shared/modules';
-import { TreeRow } from '@renderer/components';
+import { Badge, ContextMenu, TreeRow } from '@renderer/components';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
 
 const ROOT = '\0root';
 
-/** A tree panel whose items come from a language module (via the extension host). */
+/**
+ * A tree panel whose items come from a language module (via the extension host). Clicking an item
+ * opens its file if it has one, otherwise expands it; the chevron always expands. Right-click shows
+ * the item's actions.
+ */
 export function ModuleTreePanel({ panelId }: { panelId: string }) {
   const ws = useWorkspace();
   const [children, setChildren] = useState<Map<string, TreeItem[]>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; item: TreeItem } | null>(null);
+  // The refresh listener is registered once, so it reads the expanded set through a ref.
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
 
   const load = async (parentId: string | null) => {
     try {
@@ -25,11 +33,16 @@ export function ModuleTreePanel({ panelId }: { panelId: string }) {
 
   useEffect(() => {
     void load(null);
-    return window.saturn.modules.onTreeRefresh((id) => {
+    // A refresh of one item reloads just that subtree; a full refresh reloads the root and every expanded item.
+    return window.saturn.modules.onTreeRefresh((id, itemId) => {
       if (id !== panelId) return;
+      if (itemId) {
+        void load(itemId);
+        return;
+      }
       setChildren(new Map());
       void load(null);
-      expanded.forEach((p) => void load(p));
+      expandedRef.current.forEach((p) => void load(p));
     });
   }, [panelId]);
 
@@ -46,7 +59,7 @@ export function ModuleTreePanel({ panelId }: { panelId: string }) {
   const open = (item: TreeItem) => {
     if (!item.open) return;
     const path = /^([a-zA-Z]:)?[\\/]/.test(item.open.path) ? item.open.path : `${ws.projectPath}/${item.open.path}`;
-    void ws.documents.open(path, { line: item.open.line });
+    void ws.documents.open(path, { line: item.open.line, column: item.open.column });
   };
 
   const rows: { item: TreeItem; depth: number }[] = [];
@@ -67,15 +80,32 @@ export function ModuleTreePanel({ panelId }: { panelId: string }) {
           key={item.id}
           depth={depth}
           label={item.label}
+          icon={item.badge ? <Badge text={item.badge} /> : undefined}
+          description={item.description}
+          tooltip={item.tooltip}
           expanded={item.hasChildren ? expanded.has(item.id) : undefined}
           selected={item.id === selected}
+          onToggle={() => toggle(item)}
           onClick={() => {
             setSelected(item.id);
-            if (item.hasChildren) toggle(item);
-            else open(item);
+            if (item.open) open(item);
+            else if (item.hasChildren) toggle(item);
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setSelected(item.id);
+            if (item.actions?.length) setMenu({ x: e.clientX, y: e.clientY, item });
           }}
         />
       ))}
+      {menu && (
+        <ContextMenu
+          at={menu}
+          items={(menu.item.actions ?? []).map((a) => ({ id: a.id, label: a.label }))}
+          onPick={(actionId) => void window.saturn.modules.treeAction(panelId, actionId, menu.item).catch((e) => setError(String((e as Error).message).replace(/^.*Error: /, '')))}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
 }

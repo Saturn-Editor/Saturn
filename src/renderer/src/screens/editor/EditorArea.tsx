@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { Button, CodeIcon, IconButton, PreviewIcon, SplitIcon, Tabs } from '@renderer/components';
+import { Button, CodeIcon, IconButton, PreviewIcon, SplitIcon, TabMenu } from '@renderer/components';
 import { PreviewPane } from '@renderer/preview/PreviewPane';
 import type { ViewMode } from '@renderer/preview/PreviewRegistry';
 import { createEditorState, cursorLabel, languageCompartment } from '@renderer/editor/codemirrorSetup';
@@ -71,7 +71,6 @@ export function EditorArea() {
     const cached = states.current.get(path);
     const state = cached ?? createEditorState(documents.docs.value.find((d) => d.path === path)?.text ?? '', {
       onChange: (text) => documents.setText(path, text),
-      onSave: () => void documents.save(path),
       onCursor: (label) => (ws.cursor.value = label),
     });
     v.setState(state);
@@ -85,13 +84,14 @@ export function EditorArea() {
     }
   }, [activeDoc?.path, documents.docs.value.length, modulesVersion]);
 
-  // Jump to a requested line once its file is the one showing.
+  // Jump to a requested line (and column) once its file is the one showing.
   const reveal = documents.reveal.value;
   useEffect(() => {
     const v = view.current;
     if (!v || !reveal || reveal.path !== shownPath.current) return;
     const line = v.state.doc.line(Math.min(Math.max(1, reveal.line), v.state.doc.lines));
-    v.dispatch({ selection: { anchor: line.from }, effects: EditorView.scrollIntoView(line.from, { y: 'center' }) });
+    const pos = line.from + Math.min(Math.max(0, (reveal.column ?? 1) - 1), line.length);
+    v.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: 'center' }) });
     v.focus();
     documents.reveal.value = null;
   }, [reveal, activeDoc?.path]);
@@ -117,7 +117,7 @@ export function EditorArea() {
   return (
     <div class="flex-1 flex flex-col min-w-0 min-h-0 bg-editor">
       {tabs.length > 0 && (
-        <Tabs
+        <TabMenu
           tabs={tabs}
           active={activePath}
           onSelect={(p) => (documents.activePath.value = p)}

@@ -4,10 +4,10 @@ import type { ContributionSnapshot } from '@shared/modules';
 import { Badge } from '@renderer/components';
 import { ModuleTreePanel } from '@renderer/panels/builtin/ModuleTreePanel';
 import type { EditorWorkspace } from '@renderer/screens/editor/EditorWorkspace';
-import { lspCompletion } from './completion';
+import { languageServerFeatures, receiveDiagnostics } from './languageServer';
 import { clearGrammars, loadGrammar, textMateHighlighting } from './textmate';
 
-export const EMPTY_SNAPSHOT: ContributionSnapshot = { languages: [], panels: [], commands: [], previews: [], fileTemplates: [], newProject: [] };
+export const EMPTY_SNAPSHOT: ContributionSnapshot = { languages: [], panels: [], commands: [], previews: [], fileTemplates: [], newProject: [], settings: [] };
 
 export type LanguageInfo = ContributionSnapshot['languages'][number];
 
@@ -31,18 +31,27 @@ export function projectBadges(snapshot: ContributionSnapshot, languageIds: strin
  */
 export class ModuleBridge {
   readonly snapshot = signal<ContributionSnapshot>(EMPTY_SNAPSHOT);
-  /** Bumped whenever modules change, so open editors rebuild their language support. */
+  /** Bumped whenever modules or the completion setting change, so open editors rebuild their language support. */
   readonly version = signal(0);
   private disposers: (() => void)[] = [];
+  /** The Settings "Code completion" switch. */
+  private completion = true;
 
   constructor(private readonly ws: EditorWorkspace) {}
 
   async start(): Promise<void> {
     const api = window.saturn.modules;
+    this.completion = (await window.saturn.settings.get()).completion;
+    window.saturn.settings.onChanged((s) => {
+      if (s.completion === this.completion) return;
+      this.completion = s.completion;
+      this.version.value++;
+    });
     this.apply(await api.snapshot());
     api.onChanged((snapshot) => this.apply(snapshot));
-    api.onOpenFile((path, line) => void this.ws.documents.open(this.absolute(path), { line }));
-    api.onHostProblem((message) => (this.ws.notice.value = message));
+    api.onOpenFile((path, line, column) => void this.ws.documents.open(this.absolute(path), { line, column }));
+    api.onDiagnostics((path, list) => receiveDiagnostics(path, list));
+    api.onMessage((m) => (this.ws.notice.value = { text: m.message, kind: m.kind }));
   }
 
   languageFor(path: string): LanguageInfo | undefined {
@@ -58,7 +67,10 @@ export class ModuleBridge {
       const grammar = await loadGrammar(language.id).catch(() => null);
       if (grammar) extensions.push(textMateHighlighting(grammar));
     }
-    if (language.hasServer) extensions.push(lspCompletion(path, language.id));
+    if (language.hasServer) {
+      const openLocation = (loc: { path: string; line: number; column: number }) => void this.ws.documents.open(loc.path, { line: loc.line, column: loc.column });
+      extensions.push(languageServerFeatures({ path, languageId: language.id, openLocation }, { completion: this.completion }));
+    }
     return extensions;
   }
 

@@ -24,20 +24,25 @@ function baseName(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
 }
 
+/** Is `path` the same as `dir` or inside it? */
+function isUnder(path: string, dir: string): boolean {
+  return path === dir || path.startsWith(`${dir}/`) || path.startsWith(`${dir}\\`);
+}
+
 /** The files open in an editor window, their unsaved text and which one is active. */
 export class EditorDocuments {
   readonly docs = signal<OpenDoc[]>([]);
   readonly infos = signal<InfoDoc[]>([]);
   readonly activePath = signal<string | null>(null);
   readonly active = computed(() => this.docs.value.find((d) => d.path === this.activePath.value) ?? null);
-  /** A line (1-based) the editor should jump to once that file is showing. */
-  readonly reveal = signal<{ path: string; line: number } | null>(null);
+  /** A line and optional column (both 1-based) the editor should jump to once that file is showing. */
+  readonly reveal = signal<{ path: string; line: number; column?: number } | null>(null);
 
   constructor(private readonly api: Pick<SaturnApi, 'fs' | 'window'>) {}
 
-  /** Opens (or switches to) a file; `line` (1-based) moves the cursor there. */
-  async open(path: string, opts: { force?: boolean; line?: number } = {}): Promise<OpenResult> {
-    if (opts.line) this.reveal.value = { path, line: opts.line };
+  /** Opens (or switches to) a file; `line` and `column` (1-based) move the cursor there. */
+  async open(path: string, opts: { force?: boolean; line?: number; column?: number } = {}): Promise<OpenResult> {
+    if (opts.line) this.reveal.value = { path, line: opts.line, column: opts.column };
     if (this.docs.value.some((d) => d.path === path)) {
       this.activePath.value = path;
       return 'opened';
@@ -66,6 +71,19 @@ export class EditorDocuments {
       this.activePath.value = remaining[Math.max(0, index - 1)] ?? null;
     }
     this.reportDirty();
+  }
+
+  /** Closes every tab for `path` or anything inside it (after it was deleted). */
+  closeUnder(path: string): void {
+    for (const p of this.tabOrder()) if (isUnder(p, path)) this.close(p);
+  }
+
+  /** Points tabs at their new location after `from` was renamed to `to` (a file, or a folder containing them). */
+  moved(from: string, to: string): void {
+    const move = (p: string) => (isUnder(p, from) ? to + p.slice(from.length) : p);
+    this.docs.value = this.docs.value.map((d) => (isUnder(d.path, from) ? { ...d, path: move(d.path), name: baseName(move(d.path)) } : d));
+    this.infos.value = this.infos.value.map((i) => (isUnder(i.path, from) ? { ...i, path: move(i.path), name: baseName(move(i.path)) } : i));
+    if (this.activePath.value) this.activePath.value = move(this.activePath.value);
   }
 
   setText(path: string, text: string): void {

@@ -1,5 +1,5 @@
 import { watch, type FSWatcher } from 'node:fs';
-import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { DirEntry, FileReadResult } from '@shared/types';
 
@@ -51,6 +51,26 @@ export class FileService {
     const full = this.inside(path);
     await this.assertFree(full);
     await mkdir(full);
+  }
+
+  /** Renames a file or folder in place; returns its new path. The project folder itself can't be renamed. */
+  async rename(path: string, newName: string): Promise<string> {
+    const full = this.entry(path);
+    const name = newName.trim();
+    if (!name || name === '.' || name === '..' || /[\\/]/.test(name)) throw new Error('Enter a name without slashes');
+    const target = join(dirname(full), name);
+    if (target === full) return full;
+    // A case-only rename is the same entry on case-insensitive disks, so it isn't "already existing".
+    if (target.toLowerCase() !== full.toLowerCase()) await this.assertFree(target);
+    await rename(full, target);
+    return target;
+  }
+
+  /** The full path of a file or folder inside the project, for actions such as Delete; never the project folder itself. */
+  entry(path: string): string {
+    const full = this.inside(path);
+    if (full === this.root) throw new Error("That's the project folder");
+    return full;
   }
 
   private async assertFree(full: string): Promise<void> {

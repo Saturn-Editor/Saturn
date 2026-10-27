@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { DirEntry } from '@shared/types';
-import { Menu, TextInput, TreeRow } from '@renderer/components';
+import { ContextMenu, TextInput, TreeRow, type MenuEntry } from '@renderer/components';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
 
 interface Row {
@@ -17,14 +17,18 @@ function parentOf(path: string): string {
   return path.replace(/[\\/][^\\/]*$/, '');
 }
 
-/** Inline name box shown in the tree while creating a file or folder (Enter creates, Escape cancels). */
-function NameRow({ depth, placeholder, onSubmit, onCancel }: {
+const REVEAL_LABEL = navigator.userAgent.includes('Mac') ? 'Reveal in Finder'
+  : navigator.userAgent.includes('Windows') ? 'Show in Explorer' : 'Show in File Manager';
+
+/** Inline name box shown in the tree while creating or renaming a file or folder (Enter confirms, Escape cancels). */
+function NameRow({ depth, placeholder, initial = '', onSubmit, onCancel }: {
   depth: number;
   placeholder: string;
+  initial?: string;
   onSubmit: (name: string) => Promise<void>;
   onCancel: () => void;
 }) {
-  const [name, setName] = useState('');
+  const [name, setName] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const submit = async () => {
     try {
@@ -57,7 +61,18 @@ function NameRow({ depth, placeholder, onSubmit, onCancel }: {
   );
 }
 
-/** File explorer: the project folder as the root of a lazily-expanding tree, with a right-click New menu. */
+interface MenuState {
+  x: number;
+  y: number;
+  entry: DirEntry;
+  /** "actions" is the right-click menu; "new" is the New file/folder menu it opens from New…. */
+  mode: 'actions' | 'new';
+}
+
+/**
+ * File explorer: the project folder as the root of a lazily-expanding tree. Right-click opens a
+ * menu: New… (folders), Open (files), Rename…, Delete, copying the path and showing it in the OS.
+ */
 export function ProjectPanel() {
   const ws = useWorkspace();
   const root = ws.projectPath;
@@ -65,8 +80,10 @@ export function ProjectPanel() {
   const [children, setChildren] = useState<Map<string, DirEntry[]>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set([root]));
   const [selected, setSelected] = useState<string | null>(null);
-  const [menu, setMenu] = useState<{ x: number; y: number; dir: string } | null>(null);
+  const [menu, setMenu] = useState<MenuState | null>(null);
   const [creating, setCreating] = useState<Creating | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
 
   const load = async (dir: string) => {
     try {
@@ -90,13 +107,6 @@ export function ProjectPanel() {
       });
     });
   }, [root]);
-
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    window.addEventListener('pointerdown', close);
-    return () => window.removeEventListener('pointerdown', close);
-  }, [menu]);
 
   const expand = (dir: string) => {
     setExpanded((prev) => new Set(prev).add(dir));
@@ -134,15 +144,67 @@ export function ProjectPanel() {
 
   const openMenu = (e: MouseEvent, entry: DirEntry) => {
     e.preventDefault();
+    e.stopPropagation();
     setSelected(entry.path);
-    setMenu({ x: e.clientX, y: e.clientY, dir: entry.kind === 'dir' ? entry.path : parentOf(entry.path) });
+    setProblem(null);
+    setMenu({ x: e.clientX, y: e.clientY, entry, mode: 'actions' });
   };
 
   const startCreating = (templateId: string) => {
     if (!menu) return;
-    expand(menu.dir);
-    setCreating({ dir: menu.dir, templateId });
-    setMenu(null);
+    const dir = menu.entry.kind === 'dir' ? menu.entry.path : parentOf(menu.entry.path);
+    expand(dir);
+    setCreating({ dir, templateId });
+  };
+
+  const report = (e: unknown) => setProblem(String((e as Error).message).replace(/^.*Error: /, ''));
+
+  const runAction = (action: string) => {
+    if (!menu) return;
+    const { entry } = menu;
+    // The menu has already closed itself; New… reopens it in the same place as the New menu.
+    if (action === 'new') setMenu({ ...menu, mode: 'new' });
+    if (action === 'open') void ws.documents.open(entry.path);
+    if (action === 'rename') setRenaming(entry.path);
+    if (action === 'delete') {
+      void window.saturn.fs.trash(entry.path).then((done) => {
+        if (!done) return;
+        ws.documents.closeUnder(entry.path);
+        void load(parentOf(entry.path));
+      }, report);
+    }
+    if (action === 'copy-path') void navigator.clipboard.writeText(entry.path);
+    if (action === 'copy-relative') void navigator.clipboard.writeText(entry.path === root ? '.' : entry.path.slice(root.length + 1));
+    if (action === 'reveal') void window.saturn.fs.reveal(entry.path).catch(report);
+  };
+
+  const rename = async (name: string) => {
+    if (!renaming) return;
+    const from = renaming;
+    const to = await window.saturn.fs.rename(from, name);
+    setRenaming(null);
+    ws.documents.moved(from, to);
+    // Keep a renamed folder's expanded state and loaded children under the new path.
+    if (expanded.has(from)) setExpanded((prev) => new Set([...prev].map((p) => (p === from ? to : p))));
+    await load(parentOf(from));
+    if (children.has(from)) void load(to);
+    setSelected(to);
+  };
+
+  const actionItems = (entry: DirEntry): MenuEntry[] => {
+    const isRoot = entry.path === root;
+    return [
+      ...(entry.kind === 'dir' ? [{ id: 'new', label: 'New…', testId: 'menu-new' }] : [{ id: 'open', label: 'Open', testId: 'menu-open' }]),
+      ...(isRoot ? [] : [
+        { separator: true as const },
+        { id: 'rename', label: 'Rename…', testId: 'menu-rename' },
+        { id: 'delete', label: 'Delete', testId: 'menu-delete' },
+      ]),
+      { separator: true },
+      { id: 'copy-path', label: 'Copy Path', testId: 'menu-copy-path' },
+      { id: 'copy-relative', label: 'Copy Relative Path', testId: 'menu-copy-relative' },
+      { id: 'reveal', label: REVEAL_LABEL, testId: 'menu-reveal' },
+    ];
   };
 
   const create = async (name: string) => {
@@ -167,17 +229,21 @@ export function ProjectPanel() {
     >
       {rows.map(({ entry, depth }) => (
         <div key={entry.path} onContextMenu={(e) => openMenu(e, entry)}>
-          <TreeRow
-            depth={depth}
-            label={entry.name}
-            expanded={entry.kind === 'dir' ? expanded.has(entry.path) : undefined}
-            selected={entry.path === selected}
-            onClick={() => {
-              setSelected(entry.path);
-              if (entry.kind === 'dir') toggle(entry.path);
-            }}
-            onDoubleClick={() => entry.kind === 'file' && void ws.documents.open(entry.path)}
-          />
+          {renaming === entry.path ? (
+            <NameRow depth={depth - 1} placeholder="Name" initial={entry.name} onSubmit={rename} onCancel={() => setRenaming(null)} />
+          ) : (
+            <TreeRow
+              depth={depth}
+              label={entry.name}
+              expanded={entry.kind === 'dir' ? expanded.has(entry.path) : undefined}
+              selected={entry.path === selected}
+              onClick={() => {
+                setSelected(entry.path);
+                if (entry.kind === 'dir') toggle(entry.path);
+              }}
+              onDoubleClick={() => entry.kind === 'file' && void ws.documents.open(entry.path)}
+            />
+          )}
           {creating && creating.dir === entry.path && (
             <NameRow
               depth={depthOf(entry.path)}
@@ -188,11 +254,14 @@ export function ProjectPanel() {
           )}
         </div>
       ))}
-      {menu && (
-        <Menu
+      {problem && <div class="px-2 pt-1 text-accent" role="alert">{problem}</div>}
+      {menu?.mode === 'actions' && (
+        <ContextMenu at={menu} items={actionItems(menu.entry)} onPick={runAction} onClose={() => setMenu(null)} />
+      )}
+      {menu?.mode === 'new' && (
+        <ContextMenu
           at={menu}
-          class="w-52"
-          selectedIndex={-1}
+          onClose={() => setMenu(null)}
           items={[
             { group: 'New' },
             ...ws.fileTemplates.files().map((t) => ({ id: t.id, label: t.label, icon: t.icon, hint: t.extension, testId: `new-${t.id}` })),
