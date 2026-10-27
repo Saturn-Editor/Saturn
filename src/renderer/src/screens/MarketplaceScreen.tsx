@@ -60,7 +60,7 @@ const MODULE_KINDS = {
   },
 } as const;
 
-function InstalledModules({ kind, list, onError }: { kind: ModuleKind; list: ListState | null; onError: (m: string | null) => void }) {
+function InstalledModules({ kind, list, onError, onBrowse }: { kind: ModuleKind; list: ListState | null; onError: (m: string | null) => void; onBrowse: () => void }) {
   const k = MODULE_KINDS[kind];
   const modules = useInstalledModules(kind);
   const act = (fn: () => Promise<void>) => void fn().then(() => onError(null), (e) => onError(errorText(e)));
@@ -68,8 +68,8 @@ function InstalledModules({ kind, list, onError }: { kind: ModuleKind; list: Lis
   if (modules.length === 0) {
     return (
       <div class="h-full flex flex-col items-center justify-center gap-1.5">
-        <div class="text-strong">No {k.plural} installed yet</div>
-        <div class="text-muted">Install one from Available, or use Upload.</div>
+        <div class="text-strong">No {k.plural} installed</div>
+        <Button testId="installed-browse" onClick={onBrowse}>Browse the Marketplace</Button>
       </div>
     );
   }
@@ -267,7 +267,7 @@ export function MarketplaceScreen({ embedded = false }: { embedded?: boolean }) 
                 ? <AvailableModules key={kind} kind={kind} list={list} onRetry={reloadList} onError={setError} />
                 : <AvailableThemes list={list} onRetry={reloadList} onError={setError} />
             ) : kind ? (
-              <InstalledModules key={kind} kind={kind} list={list} onError={setError} />
+              <InstalledModules key={kind} kind={kind} list={list} onError={setError} onBrowse={() => setTab('available')} />
             ) : (
               <InstalledThemes list={list} onError={setError} />
             )}
