@@ -4,7 +4,7 @@ import { basename, join, resolve } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { channel } from '@shared/api';
 import type { MarketplaceKind } from '@shared/marketplace';
-import { MANIFEST_FILES, SATURN_API_VERSION, type CompletionRequest, type DocumentRequest, type SettingValue, type TreeItem } from '@shared/modules';
+import { MANIFEST_FILES, SATURN_API_VERSION, type CompletionRequest, type DocumentRequest, type EditorEvent, type SettingValue, type TreeItem } from '@shared/modules';
 import type { AppFolder, AppInfo, AppSettings, Breakpoint, LayoutState, NewProjectRequest, RunEntry, ThemeMode } from '@shared/types';
 import type { AppPaths } from './Helpers/AppPaths';
 import type { ExtensionHostService } from './Services/ExtensionHostService';
@@ -328,6 +328,13 @@ export class IpcRouter {
     this.handle('modules', 'treeAction', (e, panelId: string, actionId: string, item: TreeItem) => host.treeAction(panelId, actionId, item, ctx(e)));
     this.handle('modules', 'renderPreview', (e, id: string, text: string, path: string) => host.renderPreview(id, text, { ...ctx(e), path }));
     this.handle('modules', 'templateFile', (e, id: string, name: string, dir: string) => host.templateFile(id, { ...ctx(e), name, dir }));
+    this.handle('modules', 'webviewHtml', (e, panelId: string) => host.webviewHtml(panelId, ctx(e)));
+    this.handle('modules', 'webviewMessage', (e, panelId: string, message: unknown) => host.webviewMessage(panelId, message, ctx(e)));
+    // Editor windows report their open files, active file and selection for `saturn.editor`.
+    this.on('modules', 'editorEvent', (e, event: EditorEvent) => {
+      const projectPath = windows.projectOf(this.senderWindow(e));
+      if (projectPath) host.editorEvent(projectPath, event);
+    });
 
     this.on('windows', 'openMarketplace', (e, section?: string) => windows.openMarketplace(this.senderWindow(e), section));
   }

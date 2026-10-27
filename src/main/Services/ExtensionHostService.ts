@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { utilityProcess, type UtilityProcess } from 'electron';
-import type { MessageKind, ModuleMessage, NotificationAction, SettingValues, TreeItem } from '@shared/modules';
+import type { EditorEvent, EditorFile, MessageKind, ModuleMessage, NotificationAction, SettingValues, TreeItem } from '@shared/modules';
 import { Rpc } from '@shared/rpc';
 import type { InstalledModule } from './CodeModuleService';
 
@@ -12,6 +12,10 @@ export interface HostEvents {
   restartLanguageServer(moduleId: string): void;
   notify(notification: { moduleId: string; title: string; message?: string; kind?: MessageKind; actions?: NotificationAction[] }): void;
   crashed(reason: string): void;
+  /** A module sent its webview panel a message: to that project's window, or every window when null. */
+  webviewPost(panelId: string, projectPath: string | null, message: unknown): void;
+  /** A module asked for its webview panel's HTML to be loaded again. */
+  webviewRefresh(panelId: string): void;
 }
 
 type Ctx = { projectPath: string };
@@ -54,6 +58,8 @@ export class ExtensionHostService {
     rpc.handle('restartLanguageServer', (moduleId: string) => this.events.restartLanguageServer(moduleId));
     rpc.handle('runInTerminal', (projectPath: string, name: string, command: string) => this.events.runInTerminal(projectPath, name, command));
     rpc.handle('createProgress', (createId: string, message: string) => this.createProgress.get(createId)?.(message));
+    rpc.handle('webviewPost', (panelId: string, projectPath: string | null, message: unknown) => this.events.webviewPost(panelId, projectPath, message));
+    rpc.handle('webviewRefresh', (panelId: string) => this.events.webviewRefresh(panelId));
     child.on('message', (message) => rpc.receive(message));
     child.on('exit', (code) => {
       rpc.rejectAll('The extension host stopped');
@@ -66,10 +72,38 @@ export class ExtensionHostService {
     this.child = child;
     this.rpc = rpc;
     const loadable = modules.map((m) => ({ id: m.manifest.id, dir: m.dir, main: m.manifest.main, settings: m.settings, storageDir: m.storageDir }));
+    // Open files are known before modules activate, so `saturn.editor` answers from the start.
+    for (const [projectPath, state] of this.editors) {
+      for (const file of state.files.values()) rpc.notify('editorEvent', projectPath, { type: 'file', file });
+      rpc.notify('editorEvent', projectPath, state.active);
+    }
     await rpc.call<{ id: string; error: string }[]>('activate', loadable).then(
       (failures) => failures.forEach((f) => console.error(`Module ${f.id} failed to activate: ${f.error}`)),
       (e) => console.error('Extension host failed to activate modules', e),
     );
+  }
+
+  /**
+   * What each editor window reports about its open files, active file and selection. Kept here too so
+   * a restarted host is given the current state before modules activate.
+   */
+  private readonly editors = new Map<string, { files: Map<string, EditorFile>; active: EditorEvent }>();
+
+  editorEvent(projectPath: string, event: EditorEvent): void {
+    const state = this.editors.get(projectPath) ?? { files: new Map(), active: { type: 'active', path: null, selection: null } };
+    if (event.type === 'file') state.files.set(event.file.path, event.file);
+    else if (event.type === 'closed') state.files.delete(event.path);
+    else state.active = event;
+    this.editors.set(projectPath, state);
+    this.rpc?.notify('editorEvent', projectPath, event);
+  }
+
+  webviewHtml(panelId: string, ctx: Ctx): Promise<string> {
+    return this.call('webviewHtml', panelId, ctx);
+  }
+
+  webviewMessage(panelId: string, message: unknown, ctx: Ctx): Promise<void> {
+    return this.call('webviewMessage', panelId, message, ctx);
   }
 
   /** Asks modules to `deactivate()` (waiting a moment at most), then stops the host. */
@@ -104,6 +138,7 @@ export class ExtensionHostService {
 
   /** A project's editor window closed (modules listen with `saturn.projects.onDidClose`). */
   projectClosed(projectPath: string): void {
+    this.editors.delete(projectPath);
     void this.ready.then(() => this.rpc?.notify('projectClosed', projectPath));
   }
 

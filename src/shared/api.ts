@@ -3,7 +3,7 @@ import type {
   RunEntry, Theme, ThemeMode, ThemeSummary, Unsubscribe, WindowKind,
 } from './types';
 import type {
-  AppNotification, CompletionItem, CompletionRequest, ContributionSnapshot, Diagnostic, DocumentRequest, DocumentSymbol, FileEdits, ModuleMessage,
+  AppNotification, CompletionItem, CompletionRequest, ContributionSnapshot, Diagnostic, DocumentRequest, EditorEvent, DocumentSymbol, FileEdits, ModuleMessage,
   ModuleSummary, ReferenceLocation, SettingValue, SettingValues, SignatureHelp, SourceLocation, TextEdit, TreeItem,
 } from './modules';
 import type { MarketplaceEntry, MarketplaceKind } from './marketplace';
@@ -94,6 +94,16 @@ export interface SaturnApi {
     onOpenFile(cb: (path: string, line?: number, column?: number) => void): Unsubscribe;
     /** A module asked to run a command in a new Terminal tab (`saturn.terminal.run`). */
     onRunInTerminal(cb: (name: string, command: string) => void): Unsubscribe;
+    /** A webview panel's HTML, from its module. */
+    webviewHtml(panelId: string): Promise<string>;
+    /** Passes a message from a webview panel's page to its module. */
+    webviewMessage(panelId: string, message: unknown): Promise<void>;
+    /** A module sent its webview panel a message. */
+    onWebviewPost(cb: (panelId: string, message: unknown) => void): Unsubscribe;
+    /** A module asked for its webview panel to load again. */
+    onWebviewRefresh(cb: (panelId: string) => void): Unsubscribe;
+    /** Tells modules about this window's open files, active file and selection (`saturn.editor`). */
+    reportEditor(event: EditorEvent): void;
     /** Messages from modules (and extension host problems) for the status bar. */
     onMessage(cb: (message: ModuleMessage) => void): Unsubscribe;
   };

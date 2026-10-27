@@ -156,6 +156,10 @@ export class SaturnApp {
       restartLanguageServer: (moduleId) => languageServers.restartModule(moduleId),
       runInTerminal: (projectPath, name, command) => router?.sendToProject(projectPath, 'modules', 'runInTerminal', name, command),
       crashed: (message) => router?.broadcast('modules', 'message', { message, kind: 'error', moduleId: 'saturn' }),
+      webviewPost: (panelId, projectPath, message) => (projectPath
+        ? router?.sendToProject(projectPath, 'modules', 'webviewPost', panelId, message)
+        : router?.broadcast('modules', 'webviewPost', panelId, message)),
+      webviewRefresh: (panelId) => router?.broadcast('modules', 'webviewRefresh', panelId),
     });
     // Closing a project's window: modules release what they hold for it, and its language servers stop.
     windows.onEditorOpened((projectPath) => host.projectOpened(projectPath));

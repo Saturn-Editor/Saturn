@@ -67,6 +67,11 @@ export interface ManifestPanel {
   id: string;
   title: string;
   dock: 'left' | 'bottom';
+  /**
+   * "tree" (the default) is drawn by Saturn from `saturn.panels.registerTree`; "webview" shows the
+   * module's own HTML from `saturn.webviews.register`, which can message the module back.
+   */
+  kind?: 'tree' | 'webview';
   /** Its icon: an .svg or .png file at the module folder root, e.g. "panel-icon.svg". Defaults to the module's icon, then "?". */
   icon?: string;
 }
@@ -364,6 +369,35 @@ export interface SourceLocation {
   line: number;
   column: number;
 }
+
+/** A position in a file, 0-based like LSP. */
+export interface TextPosition {
+  line: number;
+  character: number;
+}
+
+/** A file open in an editor window, with its current text (unsaved edits included). */
+export interface EditorFile {
+  path: string;
+  /** Its language, or null for plain text. */
+  languageId: string | null;
+  text: string;
+  /** Has unsaved changes. */
+  dirty: boolean;
+}
+
+/** The main selection (or just the cursor, when `text` is empty). */
+export interface EditorSelection {
+  text: string;
+  start: TextPosition;
+  end: TextPosition;
+}
+
+/** What an editor window reports about its files, for modules (`saturn.editor`). */
+export type EditorEvent =
+  | { type: 'file'; file: EditorFile }
+  | { type: 'closed'; path: string }
+  | { type: 'active'; path: string | null; selection: EditorSelection | null };
 
 /** A file and its current text, for requests about the whole document (outline, formatting). */
 export interface DocumentRequest {

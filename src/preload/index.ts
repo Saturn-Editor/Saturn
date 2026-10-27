@@ -81,6 +81,11 @@ const api: SaturnApi = {
     onOpenFile: listen('modules', 'openFile'),
     onMessage: listen('modules', 'message'),
     onRunInTerminal: listen('modules', 'runInTerminal'),
+    webviewHtml: invoke('modules', 'webviewHtml'),
+    webviewMessage: invoke('modules', 'webviewMessage'),
+    onWebviewPost: listen('modules', 'webviewPost'),
+    onWebviewRefresh: listen('modules', 'webviewRefresh'),
+    reportEditor: send('modules', 'editorEvent'),
   },
   notifications: {
     list: invoke('notifications', 'list'),
