@@ -1,6 +1,6 @@
 import { KEYMAPS, type KeymapId } from '@shared/keymaps';
 import { MARKETPLACE_INDEX_URL } from '@shared/marketplace';
-import { TEXT_SIZES, type AppSettings, type ThemeMode } from '@shared/types';
+import { FILE_ENCODINGS, TEXT_SIZES, type AppSettings, type FileEncoding, type ThemeMode } from '@shared/types';
 import { FileStore } from './FileStore';
 
 export interface Settings {
@@ -15,6 +15,12 @@ export interface Settings {
   marketplaceUrl?: string;
   keymap?: KeymapId;
   textSize?: number;
+  encoding?: FileEncoding;
+  autoSave?: 'typing' | 'idle' | 'off';
+  diagnostics?: boolean;
+  autoIndent?: boolean;
+  indentWith?: 'spaces' | 'tab';
+  indentSize?: 2 | 4 | 8;
   /** Follow the OS's light/dark setting instead of `mode`. */
   syncWithOs?: boolean;
 }
@@ -44,6 +50,12 @@ export class SettingsStore {
       completion: s.completion ?? true,
       keymap: s.keymap ?? 'os',
       textSize: s.textSize ?? 100,
+      encoding: s.encoding ?? 'utf-8',
+      diagnostics: s.diagnostics ?? true,
+      autoSave: s.autoSave ?? 'idle',
+      autoIndent: s.autoIndent ?? true,
+      indentWith: s.indentWith ?? 'spaces',
+      indentSize: s.indentSize ?? 4,
       marketplaceUrl: s.marketplaceUrl ?? MARKETPLACE_INDEX_URL,
     };
   }
@@ -71,6 +83,12 @@ export class SettingsStore {
       ...(change.completion !== undefined && { completion: change.completion }),
       ...(change.keymap !== undefined && { keymap: change.keymap }),
       ...(change.textSize !== undefined && { textSize: change.textSize }),
+      ...(change.encoding !== undefined && FILE_ENCODINGS.some((e) => e.id === change.encoding) && { encoding: change.encoding }),
+      ...(change.diagnostics !== undefined && { diagnostics: change.diagnostics }),
+      ...(change.autoSave !== undefined && ['typing', 'idle', 'off'].includes(change.autoSave) && { autoSave: change.autoSave }),
+      ...(change.autoIndent !== undefined && { autoIndent: change.autoIndent }),
+      ...(change.indentWith !== undefined && { indentWith: change.indentWith === 'tab' ? 'tab' : 'spaces' }),
+      ...(change.indentSize !== undefined && { indentSize: ([2, 4, 8] as const).find((n) => n === change.indentSize) ?? 4 }),
       ...(change.marketplaceUrl !== undefined && { marketplaceUrl }),
     }));
     return this.app();

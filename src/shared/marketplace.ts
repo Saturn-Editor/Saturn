@@ -15,13 +15,19 @@ interface MarketplaceEntryBase {
   /** GitHub Release zip URL. */
   download: string;
   sha256: string;
+  /** A picture for the Marketplace (https URL); a two-letter badge from the name is shown without one. */
+  image?: string;
 }
 
 export interface MarketplaceLanguage extends MarketplaceEntryBase {
   saturnApi: string;
-  badge?: string;
   /** Pre-selected in the first-launch welcome popup. */
   default?: boolean;
+}
+
+/** An extension's zip has saturn-extension.json at its root. */
+export interface MarketplaceExtension extends MarketplaceEntryBase {
+  saturnApi: string;
 }
 
 /** A theme zip's theme.json holds its light and/or dark variant; the user's mode picks one. */
@@ -30,6 +36,8 @@ export type MarketplaceTheme = MarketplaceEntryBase;
 export interface MarketplaceIndex {
   schema: number;
   languages: MarketplaceLanguage[];
+  /** Read as empty while the index has no "extensions" array yet. */
+  extensions: MarketplaceExtension[];
   themes: MarketplaceTheme[];
 }
 
@@ -45,7 +53,8 @@ function validEntry(v: unknown): v is MarketplaceEntryBase {
     typeof e.version === 'string' &&
     typeof e.repo === 'string' && REPO.test(e.repo) &&
     typeof e.download === 'string' && e.download.startsWith(`https://github.com/${e.repo}/releases/download/`) && e.download.endsWith('.zip') &&
-    typeof e.sha256 === 'string' && SHA256.test(e.sha256);
+    typeof e.sha256 === 'string' && SHA256.test(e.sha256) &&
+    (e.image === undefined || (typeof e.image === 'string' && e.image.startsWith('https://')));
 }
 
 /** Checks the index shape; throws with a short reason if it isn't usable. */
@@ -57,6 +66,7 @@ export function parseMarketplaceIndex(v: unknown): MarketplaceIndex {
   return {
     schema: index.schema,
     languages: index.languages.filter((l) => validEntry(l) && typeof l.saturnApi === 'string'),
+    extensions: (Array.isArray(index.extensions) ? index.extensions : []).filter((x) => validEntry(x) && typeof x.saturnApi === 'string'),
     themes: index.themes.filter(validEntry),
   };
 }

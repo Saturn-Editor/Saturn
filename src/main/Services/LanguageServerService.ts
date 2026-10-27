@@ -1,11 +1,12 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createMessageConnection, StreamMessageReader, StreamMessageWriter, type MessageConnection } from 'vscode-jsonrpc/node';
 import type {
-  CompletionItem, CompletionRequest, Diagnostic, DiagnosticSeverity, ModuleMessage, SettingValues, SourceLocation, TextRange,
+  CompletionItem, CompletionRequest, Diagnostic, DiagnosticSeverity, MessageKind, ModuleMessage, NotificationAction, SettingValues,
+  SourceLocation, TextRange,
 } from '@shared/modules';
-import type { InstalledModule } from './ModuleService';
+import type { InstalledLanguage as InstalledModule } from './CodeModuleService';
 
 interface Server {
   process: ChildProcess;
@@ -34,8 +35,10 @@ type LspLocation = { uri: string; range: LspRange } | { targetUri: string; targe
 export interface LanguageServerEvents {
   /** A server published diagnostics for a file in a project. */
   diagnostics(projectPath: string, path: string, diagnostics: Diagnostic[]): void;
-  /** Something the user should know, e.g. a missing tool. */
+  /** Something the user should know, e.g. a server that failed to start. */
   message(message: ModuleMessage): void;
+  /** A notification for the bell menu, e.g. a required tool that's missing. */
+  notify(notification: { moduleId: string; title: string; message?: string; kind?: MessageKind; actions?: NotificationAction[] }): void;
 }
 
 /** What Saturn supports, so servers can adapt (LSP `initialize` client capabilities). */
@@ -76,7 +79,7 @@ export class LanguageServerService {
   /** Modules whose required tools were checked this session: true if all are present. */
   private readonly requirementChecks = new Map<string, Promise<boolean>>();
 
-  constructor(private readonly events: LanguageServerEvents = { diagnostics: () => undefined, message: () => undefined }) {}
+  constructor(private readonly events: LanguageServerEvents = { diagnostics: () => undefined, message: () => undefined, notify: () => undefined }) {}
 
   /** New module set: stops every server; they restart on next use. */
   setModules(modules: InstalledModule[]): void {
@@ -90,6 +93,17 @@ export class LanguageServerService {
     const owner = this.modules.find((m) => m.manifest.id === moduleId);
     if (!owner) return;
     owner.settings = values;
+    this.requirementChecks.delete(moduleId);
+    for (const [key, server] of this.servers) {
+      if (key.endsWith(`\0${moduleId}`)) this.stop(key, server);
+    }
+  }
+
+  /**
+   * Stops a module's servers and forgets its tool checks, so they start again (checks included) on the
+   * next request, e.g. after the module installed its server. Open files are re-sent as they're used.
+   */
+  restartModule(moduleId: string): void {
     this.requirementChecks.delete(moduleId);
     for (const [key, server] of this.servers) {
       if (key.endsWith(`\0${moduleId}`)) this.stop(key, server);
@@ -198,8 +212,18 @@ export class LanguageServerService {
             execFile(r.command, r.args ?? [], { timeout: REQUIREMENT_TIMEOUT_MS, shell: process.platform === 'win32' }, (error) => resolve(!error));
           });
           if (!found) {
-            const message = `${owner.manifest.name} needs ${r.name}, which wasn't found.${r.install ? ` ${r.install}` : ''}`;
-            this.events.message({ message, kind: 'warning', moduleId: id });
+            // A notification (bell menu) offering the module's Settings tab and any install link in the hint.
+            const link = r.install?.match(/https:\/\/\S+/)?.[0]?.replace(/[.,)]+$/, '');
+            this.events.notify({
+              moduleId: id,
+              title: `${owner.manifest.name} needs ${r.name}`,
+              message: `${r.name} wasn't found, so ${owner.manifest.name}'s language features are off.${r.install ? ` ${r.install}` : ''}`,
+              kind: 'warning',
+              actions: [
+                ...(owner.manifest.contributes?.settings?.length ? [{ label: 'Open settings', openSettings: true }] : []),
+                ...(link ? [{ label: 'Download', url: link }] : []),
+              ],
+            });
             return false;
           }
         }
@@ -231,7 +255,8 @@ export class LanguageServerService {
     const args = (config.args ?? []).map((a) => (a.includes('${setting:') ? fill(a) : /[\\/]|\.[cm]?js$/.test(a) ? join(owner.dir, a) : a));
     const child = spawn(useSaturnNode ? process.execPath : command, args, {
       cwd: projectPath,
-      env: useSaturnNode ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' } : process.env,
+      // The module's storage folder (e.g. where it downloaded the real server) is passed on as SATURN_MODULE_STORAGE.
+      env: { ...process.env, SATURN_MODULE_STORAGE: owner.storageDir, ...(useSaturnNode && { ELECTRON_RUN_AS_NODE: '1' }) },
       stdio: 'pipe',
       shell: !useSaturnNode && process.platform === 'win32',
     });
@@ -245,6 +270,12 @@ export class LanguageServerService {
         source: d.source,
       })));
     });
+    // Requests servers make of the client. Answer them (rather than leave them hanging) with what Saturn has.
+    connection.onRequest('workspace/configuration', (params: { items?: unknown[] }) => (params.items ?? []).map(() => null));
+    connection.onRequest('workspace/workspaceFolders', () => [{ uri: pathToFileURL(projectPath).href, name: basename(projectPath) }]);
+    connection.onRequest('window/workDoneProgress/create', () => null);
+    connection.onRequest('client/registerCapability', () => null);
+    connection.onRequest('client/unregisterCapability', () => null);
     connection.listen();
     const ready = connection
       .sendRequest('initialize', { processId: process.pid, rootUri: pathToFileURL(projectPath).href, capabilities: CLIENT_CAPABILITIES })

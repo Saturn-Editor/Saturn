@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { actionForKey } from '@renderer/commands/keymap';
 import { Dock } from '@renderer/panels/Dock';
+import { ButtonStrip } from '@renderer/panels/ButtonStrip';
 import { IconStrip } from '@renderer/panels/IconStrip';
 import { EditorArea } from './EditorArea';
 import { EditorWorkspace, WorkspaceContext } from './EditorWorkspace';
@@ -45,6 +46,7 @@ export function EditorScreen() {
             <EditorArea />
             <Dock dock="bottom" />
           </div>
+          <ButtonStrip />
         </div>
         <StatusBar />
       </div>

@@ -13,7 +13,7 @@ export function Dock({ dock }: { dock: DockId }) {
 
   const isLeft = dock === 'left';
   const max = isLeft ? window.innerWidth * 0.6 : window.innerHeight * 0.6;
-  const resize = (delta: number) => ws.layout.resize(dock, state.size + delta, max);
+  const resize = (size: number) => ws.layout.resize(dock, size, max);
 
   const header = (
     <div
@@ -40,11 +40,11 @@ export function Dock({ dock }: { dock: DockId }) {
         {header}
         {panel}
       </section>
-      <Splitter direction="vertical" onResize={resize} />
+      <Splitter direction="vertical" size={state.size} onResize={resize} />
     </>
   ) : (
     <>
-      <Splitter direction="horizontal" invert onResize={resize} />
+      <Splitter direction="horizontal" size={state.size} invert onResize={resize} />
       <section class="flex flex-col bg-panel shrink-0" style={{ height: `${state.size}px` }} data-testid={`panel-${def.id}`} aria-label={def.title}>
         {header}
         {panel}

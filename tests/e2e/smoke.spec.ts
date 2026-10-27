@@ -17,8 +17,9 @@ test('launches to the Welcome screen', async () => {
 test('settings switches the theme live', async () => {
   const { app } = await launchSaturn();
   const welcome = await app.firstWindow();
+  // Settings shows inside the Welcome window.
   await welcome.getByRole('button', { name: 'Settings' }).click();
-  const settings = await app.waitForEvent('window');
+  const settings = welcome.getByTestId('welcome-settings');
   await settings.getByRole('radio', { name: 'Light', exact: true }).click();
   await expect(welcome.locator('html')).toHaveAttribute('data-theme-type', 'light');
   await settings.getByRole('radio', { name: 'Dark', exact: true }).click();

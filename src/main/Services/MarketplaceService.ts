@@ -5,7 +5,8 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { unzipSync } from 'fflate';
 import { parseMarketplaceIndex, type MarketplaceIndex } from '@shared/marketplace';
 import type { ThemeSummary } from '@shared/types';
-import { MANIFEST_FILE, type ModuleService } from './ModuleService';
+import { MANIFEST_FILES, type ModuleKind } from '@shared/modules';
+import type { CodeModuleService } from './CodeModuleService';
 import type { ThemeService } from './ThemeService';
 
 /** How long the index fetch may take before the Marketplace says it can't connect. */
@@ -20,7 +21,7 @@ export class MarketplaceService {
   private index: MarketplaceIndex | null = null;
 
   constructor(
-    private readonly modules: ModuleService,
+    private readonly modules: CodeModuleService,
     private readonly themes: ThemeService,
     /** The index URL from Settings (the official one unless the user changed it). */
     private readonly indexUrl: () => Promise<string>,
@@ -33,15 +34,18 @@ export class MarketplaceService {
     return this.index;
   }
 
-  async installLanguage(id: string): Promise<void> {
-    const entry = (await this.currentIndex()).languages.find((l) => l.id === id);
+  /** Installs a language or extension from the index (its zip holds saturn-language.json or saturn-extension.json). */
+  async installModule(kind: ModuleKind, id: string): Promise<void> {
+    const index = await this.currentIndex();
+    const entry = (kind === 'language' ? index.languages : index.extensions).find((l) => l.id === id);
     if (!entry) throw new Error(`${id} isn't in the marketplace`);
+    const file = MANIFEST_FILES[kind];
     await this.withDownload(entry.download, entry.sha256, async (dir) => {
-      const manifest = await readJson(join(dir, MANIFEST_FILE), `The download has no ${MANIFEST_FILE}`) as { id?: string; version?: string };
+      const manifest = await readJson(join(dir, file), `The download has no ${file}`) as { id?: string; version?: string };
       if (manifest.id !== entry.id || manifest.version !== entry.version) {
         throw new Error(`The download doesn't match ${entry.name} ${entry.version} in the marketplace`);
       }
-      await this.modules.install(dir);
+      await this.modules.install(kind, dir);
     });
   }
 

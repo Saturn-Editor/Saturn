@@ -3,7 +3,10 @@ import { createContext } from 'preact';
 import { useContext } from 'preact/hooks';
 import type { SaturnApi } from '@shared/api';
 import type { MessageKind } from '@shared/modules';
-import { FileIcon, FolderIcon, TerminalIcon } from '@renderer/components';
+import { CommitIcon, FileIcon, FolderIcon, GitIcon, NoticesIcon, TerminalIcon } from '@renderer/components';
+import { NoticesPanel } from '@renderer/panels/builtin/NoticesPanel';
+import { CommitPanel } from '@renderer/panels/builtin/CommitPanel';
+import { GitPanel } from '@renderer/panels/builtin/GitPanel';
 import { FileTemplateRegistry, templateFileName } from '@renderer/editor/FileTemplateRegistry';
 import { CommandRegistry } from '@renderer/commands/CommandRegistry';
 import { EditorDocuments } from '@renderer/editor/EditorDocuments';
@@ -100,6 +103,30 @@ export class EditorWorkspace {
       defaultDock: 'left',
       source: 'core',
       render: () => <ProjectPanel />,
+    });
+    this.panels.register({
+      id: 'commit',
+      title: 'Commit',
+      icon: <CommitIcon />,
+      defaultDock: 'left',
+      source: 'core',
+      render: () => <CommitPanel />,
+    });
+    this.panels.register({
+      id: 'git',
+      title: 'Git',
+      icon: <GitIcon />,
+      defaultDock: 'bottom',
+      source: 'core',
+      render: () => <GitPanel />,
+    });
+    this.panels.register({
+      id: 'notices',
+      title: 'Notices',
+      icon: <NoticesIcon />,
+      defaultDock: 'bottom',
+      source: 'core',
+      render: () => <NoticesPanel />,
     });
     this.panels.register({
       id: 'terminal',

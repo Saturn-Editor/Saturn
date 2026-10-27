@@ -2,9 +2,10 @@
  * The extension host: a separate process that loads enabled modules and runs their code, so a slow
  * or crashing module can never freeze the editor. Main talks to it over an Rpc channel.
  */
+import { mkdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
-import type { MessageKind, SettingValue, SettingValues, TreeItem } from '@shared/modules';
+import type { MessageKind, NotificationAction, SettingValue, SettingValues, TreeItem } from '@shared/modules';
 import { Rpc } from '@shared/rpc';
 import { findFiles } from '../main/Helpers/findFiles';
 
@@ -26,6 +27,12 @@ export interface TreeProvider {
 /** The `saturn` object every module's `activate(saturn)` receives. A module may also export `deactivate()`, called before it unloads. */
 export interface SaturnModuleApi {
   platform: NodeJS.Platform;
+  /**
+   * A writable folder for this module that survives updates (e.g. downloaded tools such as a language
+   * server). Created before activate(); removed on uninstall. Its language server also gets it as
+   * the SATURN_MODULE_STORAGE environment variable.
+   */
+  storagePath: string;
   commands: { register(id: string, run: (ctx: ModuleContext) => void | Promise<void>): void };
   panels: {
     registerTree(id: string, provider: TreeProvider): void;
@@ -55,6 +62,19 @@ export interface SaturnModuleApi {
   window: {
     /** Shows a message in the status bar: of that project's window if given, otherwise every window. */
     showMessage(message: string, options?: { kind?: MessageKind; projectPath?: string }): void;
+    /**
+     * Adds a notification to the bell menu next to Settings. Actions can run one of this module's
+     * commands, open its Settings tab, or open an https link.
+     */
+    notify(notification: { title: string; message?: string; kind?: MessageKind; actions?: NotificationAction[] }): void;
+  };
+  languageServer: {
+    /** Restarts this module's language server (and re-checks `requires`), e.g. after installing it. */
+    restart(): void;
+  };
+  terminal: {
+    /** Runs a shell command in a new Terminal tab of that project's window (interactive, with Stop), e.g. "dotnet run". */
+    run(projectPath: string, options: { name: string; command: string }): void;
   };
   /** This module's own settings (declared in `contributes.settings`, edited in its Settings tab). */
   settings: {
@@ -68,6 +88,7 @@ interface LoadedModule {
   dir: string;
   main?: string;
   settings: SettingValues;
+  storageDir: string;
 }
 
 type Fn = (...args: any[]) => any;
@@ -127,8 +148,9 @@ class ExtensionHost {
       this.settings.set(m.id, m.settings);
       if (!m.main) continue;
       try {
+        await mkdir(m.storageDir, { recursive: true });
         const mod = await import(/* @vite-ignore */ pathToFileURL(join(m.dir, m.main)).href);
-        await mod.activate?.(this.apiFor(m.id));
+        await mod.activate?.(this.apiFor(m.id, m.storageDir));
         if (typeof mod.deactivate === 'function') this.deactivators.push({ moduleId: m.id, fn: mod.deactivate });
       } catch (e) {
         failures.push({ id: m.id, error: e instanceof Error ? e.message : String(e) });
@@ -162,9 +184,10 @@ class ExtensionHost {
     }
   }
 
-  private apiFor(moduleId: string): SaturnModuleApi {
+  private apiFor(moduleId: string, storagePath: string): SaturnModuleApi {
     return {
       platform: process.platform,
+      storagePath,
       commands: { register: (id, run) => void this.commands.set(id, run) },
       panels: {
         registerTree: (id, provider) => void this.trees.set(id, provider),
@@ -184,6 +207,13 @@ class ExtensionHost {
       },
       window: {
         showMessage: (message, options) => this.rpc.notify('showMessage', { message, kind: options?.kind ?? 'info', projectPath: options?.projectPath, moduleId }),
+        notify: (n) => this.rpc.notify('notify', { ...n, moduleId }),
+      },
+      languageServer: {
+        restart: () => this.rpc.notify('restartLanguageServer', moduleId),
+      },
+      terminal: {
+        run: (projectPath, options) => this.rpc.notify('runInTerminal', projectPath, options.name, options.command),
       },
       settings: {
         get: (id) => this.settings.get(moduleId)?.[id],

@@ -1,16 +1,30 @@
 import {
-  copyLineDown, defaultKeymap, deleteLine, history, historyKeymap, indentWithTab, moveLineDown, moveLineUp,
+  copyLineDown, defaultKeymap, deleteLine, history, historyKeymap, indentWithTab, insertNewline, moveLineDown, moveLineUp,
 } from '@codemirror/commands';
-import { bracketMatching } from '@codemirror/language';
+import { bracketMatching, indentUnit } from '@codemirror/language';
 import { gotoLine, highlightSelectionMatches, openSearchPanel, search, searchKeymap } from '@codemirror/search';
 import { Compartment, EditorState, Prec } from '@codemirror/state';
 import {
   drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, type Command,
 } from '@codemirror/view';
 import { actionForKey } from '@renderer/commands/keymap';
+import { goToDefinition } from '@renderer/modules/languageServer';
 
 /** Plan 3 puts language support (highlighting, completion) in here; the core leaves it empty. */
 export const languageCompartment = new Compartment();
+
+/** Settings → Behaviour. New editor states read it; ModuleBridge rebuilds open editors when it changes. */
+export const editorBehaviour = { autoIndent: true, indentWith: 'spaces' as 'spaces' | 'tab', indentSize: 4 };
+
+function behaviourExtensions() {
+  const { autoIndent, indentWith, indentSize } = editorBehaviour;
+  return [
+    indentUnit.of(indentWith === 'tab' ? '\t' : ' '.repeat(indentSize)),
+    EditorState.tabSize.of(indentSize),
+    // Without auto-indent, Enter starts the new line at the left edge.
+    ...(autoIndent ? [] : [Prec.high(keymap.of([{ key: 'Enter', run: insertNewline }]))]),
+  ];
+}
 
 /** Colours come from the active theme's CSS variables, so theme switches restyle the editor live. */
 const saturnTheme = EditorView.theme({
@@ -36,6 +50,12 @@ const saturnTheme = EditorView.theme({
   '.cm-completionDetail': { color: 'var(--saturn-muted)', fontStyle: 'normal', marginLeft: '12px' },
   '.cm-completionMatchedText': { textDecoration: 'none', color: 'var(--saturn-accent)' },
   '.cm-completionInfo': { backgroundColor: 'var(--saturn-raised)', border: '1px solid var(--saturn-border)' },
+  // Language-server hover text and diagnostics popups.
+  '.cm-saturn-hover': { padding: '4px 8px', maxWidth: '560px', maxHeight: '320px', overflow: 'auto', whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)' },
+  '.cm-diagnostic': { padding: '4px 8px', borderLeftWidth: '3px' },
+  '.cm-diagnostic-error': { borderLeftColor: 'var(--color-red-500)' },
+  '.cm-diagnostic-warning': { borderLeftColor: 'var(--saturn-accent)' },
+  '.cm-diagnostic-info, .cm-diagnostic-hint': { borderLeftColor: 'var(--saturn-muted)' },
 });
 
 export interface EditorCallbacks {
@@ -47,6 +67,7 @@ const EDITOR_COMMANDS: Record<string, Command> = {
   'editor.find': openSearchPanel,
   'editor.replace': openSearchPanel,
   'editor.gotoLine': gotoLine,
+  'editor.gotoDefinition': (view) => goToDefinition(view),
   'editor.duplicateLine': copyLineDown,
   'editor.deleteLine': deleteLine,
   'editor.moveLineUp': moveLineUp,
@@ -83,6 +104,7 @@ export function createEditorState(text: string, callbacks: EditorCallbacks): Edi
       highlightSelectionMatches(),
       languageCompartment.of([]),
       keymapShortcuts,
+      behaviourExtensions(),
       keymap.of([
         ...defaultKeymap,
         ...historyKeymap,

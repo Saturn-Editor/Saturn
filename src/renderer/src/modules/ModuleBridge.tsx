@@ -1,13 +1,15 @@
-import { signal } from '@preact/signals';
+import { effect, signal } from '@preact/signals';
 import type { Extension } from '@codemirror/state';
-import type { ContributionSnapshot } from '@shared/modules';
-import { Badge } from '@renderer/components';
+import type { ContributionSnapshot, ModuleLook } from '@shared/modules';
+import type { AppSettings } from '@shared/types';
+import { ModuleIcon, QuestionIcon } from '@renderer/components';
+import { editorBehaviour } from '@renderer/editor/codemirrorSetup';
 import { ModuleTreePanel } from '@renderer/panels/builtin/ModuleTreePanel';
 import type { EditorWorkspace } from '@renderer/screens/editor/EditorWorkspace';
-import { languageServerFeatures, receiveDiagnostics } from './languageServer';
+import { languageServerFeatures, receiveDiagnostics, setShowDiagnostics } from './languageServer';
 import { clearGrammars, loadGrammar, textMateHighlighting } from './textmate';
 
-export const EMPTY_SNAPSHOT: ContributionSnapshot = { languages: [], panels: [], commands: [], previews: [], fileTemplates: [], newProject: [], settings: [] };
+export const EMPTY_SNAPSHOT: ContributionSnapshot = { languages: [], panels: [], commands: [], previews: [], fileTemplates: [], newProject: [], settings: [], buttons: [] };
 
 export type LanguageInfo = ContributionSnapshot['languages'][number];
 
@@ -17,12 +19,14 @@ export function languageForPath(snapshot: ContributionSnapshot, path: string): L
   return snapshot.languages.find((l) => l.extensions.some((ext) => name.endsWith(ext.toLowerCase())));
 }
 
-/** Badges for a project's languages (installed ones only, up to three); "T" for plain text. */
-export function projectBadges(snapshot: ContributionSnapshot, languageIds: string[]): string[] {
-  const badges = languageIds
-    .map((id) => snapshot.languages.find((l) => l.id === id)?.badge)
-    .filter((b): b is string => !!b);
-  return badges.length ? [...new Set(badges)].slice(0, 3) : ['T'];
+/** Icons for a project's languages (installed ones only, one per language module, up to three); "T" for plain text. */
+export function projectBadges(snapshot: ContributionSnapshot, languageIds: string[]): ModuleLook[] {
+  const looks: ModuleLook[] = [];
+  for (const id of languageIds) {
+    const language = snapshot.languages.find((l) => l.id === id);
+    if (language && !looks.some((l) => l.badge === language.badge)) looks.push({ badge: language.badge, icon: language.icon });
+  }
+  return looks.length ? looks.slice(0, 3) : [{ badge: 'T', icon: null }];
 }
 
 /**
@@ -41,16 +45,42 @@ export class ModuleBridge {
 
   async start(): Promise<void> {
     const api = window.saturn.modules;
-    this.completion = (await window.saturn.settings.get()).completion;
+    // Completion and Behaviour settings shape each editor, so a change rebuilds the open ones.
+    const read = (s: AppSettings) => {
+      const next = { completion: s.completion, autoIndent: s.autoIndent, indentWith: s.indentWith, indentSize: s.indentSize };
+      const changed = next.completion !== this.completion || next.autoIndent !== editorBehaviour.autoIndent ||
+        next.indentWith !== editorBehaviour.indentWith || next.indentSize !== editorBehaviour.indentSize;
+      this.completion = next.completion;
+      Object.assign(editorBehaviour, { autoIndent: next.autoIndent, indentWith: next.indentWith, indentSize: next.indentSize });
+      return changed;
+    };
+    const initial = await window.saturn.settings.get();
+    read(initial);
+    setShowDiagnostics(initial.diagnostics);
+    this.ws.documents.autoSave = initial.autoSave;
+    window.addEventListener('blur', () => this.ws.documents.saveOnLeave());
     window.saturn.settings.onChanged((s) => {
-      if (s.completion === this.completion) return;
-      this.completion = s.completion;
-      this.version.value++;
+      setShowDiagnostics(s.diagnostics);
+      this.ws.documents.autoSave = s.autoSave;
+      if (read(s)) this.version.value++;
     });
     this.apply(await api.snapshot());
     api.onChanged((snapshot) => this.apply(snapshot));
     api.onOpenFile((path, line, column) => void this.ws.documents.open(this.absolute(path), { line, column }));
-    api.onDiagnostics((path, list) => receiveDiagnostics(path, list));
+    window.saturn.languages.onDiagnostics((path, list) => receiveDiagnostics(path, list));
+    // A closed tab is closed on its language server too (didClose).
+    let open = new Set<string>();
+    effect(() => {
+      const now = new Set(this.ws.documents.docs.value.map((d) => d.path));
+      for (const path of open) {
+        const language = now.has(path) ? undefined : this.languageFor(path);
+        if (language?.hasServer) void window.saturn.languages.closeDocument({ path, languageId: language.id }).catch(() => undefined);
+      }
+      open = now;
+    });
+    api.onRunInTerminal((name, command) => {
+      void this.ws.terminals.openTerminal({ name, command }).then(() => this.ws.showTerminal());
+    });
     api.onMessage((m) => (this.ws.notice.value = { text: m.message, kind: m.kind }));
   }
 
@@ -85,7 +115,7 @@ export class ModuleBridge {
       this.disposers.push(ws.commands.register({
         id: cmd.id,
         title: cmd.title,
-        source: { id: cmd.moduleId, label: cmd.moduleName, icon: <Badge text={cmd.badge} /> },
+        source: { id: cmd.moduleId, label: cmd.moduleName, icon: <ModuleIcon icon={cmd.icon} badge={cmd.badge} /> },
         run: () => api.runCommand(cmd.id),
       }));
     }
@@ -93,7 +123,8 @@ export class ModuleBridge {
       this.disposers.push(ws.panels.register({
         id: panel.id,
         title: panel.title,
-        icon: <Badge text={panel.badge ?? '?'} />,
+        // A strip button needs something to show, so panels without an icon get "?".
+        icon: panel.iconUrl ? <ModuleIcon icon={panel.iconUrl} badge={panel.title} /> : <QuestionIcon />,
         defaultDock: panel.dock,
         source: panel.moduleId,
         render: () => <ModuleTreePanel panelId={panel.id} />,
@@ -108,7 +139,7 @@ export class ModuleBridge {
         extension: t.extension,
         placeholder: t.placeholder,
         source: t.moduleId,
-        icon: language && <Badge text={language.badge} />,
+        icon: language && <ModuleIcon icon={language.icon} badge={language.badge} />,
         build: (ctx) => api.templateFile(t.id, ctx.name, ctx.dir),
       }));
     }

@@ -37,7 +37,7 @@ function sharedRegistry(): Registry {
     loadGrammar: async (scope) => {
       // A missing scope gets an empty stub: returning null makes vscode-textmate drop the whole
       // begin/end rule that includes it (e.g. a ```js fence would vanish instead of staying plain).
-      const raw = (await window.saturn.modules.grammarByScope(scope).catch(() => null)) ?? { scopeName: scope, patterns: [] };
+      const raw = (await window.saturn.languages.grammarByScope(scope).catch(() => null)) ?? { scopeName: scope, patterns: [] };
       return parseRawGrammar(JSON.stringify(raw), `${scope}.json`);
     },
   });
@@ -49,7 +49,7 @@ export function loadGrammar(languageId: string): Promise<IGrammar | null> {
   let pending = grammars.get(languageId);
   if (!pending) {
     pending = (async () => {
-      const raw = (await window.saturn.modules.grammar(languageId)) as RawGrammar | null;
+      const raw = (await window.saturn.languages.grammar(languageId)) as RawGrammar | null;
       return raw ? sharedRegistry().loadGrammar(raw.scopeName) : null;
     })();
     grammars.set(languageId, pending);

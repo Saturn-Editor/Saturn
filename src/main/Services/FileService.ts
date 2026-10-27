@@ -1,18 +1,20 @@
 import { watch, type FSWatcher } from 'node:fs';
 import { mkdir, open, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import type { DirEntry, FileReadResult } from '@shared/types';
+import type { DirEntry, FileEncoding, FileReadResult } from '@shared/types';
 
 const MAX_TEXT_BYTES = 10 * 1024 * 1024;
 const SNIFF_BYTES = 8 * 1024;
 const HIDDEN = new Set(['.git']);
+const NODE_ENCODINGS: Record<FileEncoding, BufferEncoding> = { 'utf-8': 'utf8', 'utf-16': 'utf16le', 'us-ascii': 'ascii', 'iso-8859-1': 'latin1' };
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 /** File access for one project. Every path must stay inside the project root. */
 export class FileService {
   private readonly root: string;
 
-  constructor(root: string) {
+  /** `encoding` is read on every read and save, so Settings → Editor → Encoding applies straight away. */
+  constructor(root: string, private readonly encoding: () => Promise<FileEncoding> = async () => 'utf-8') {
     this.root = resolve(root);
   }
 
@@ -28,16 +30,24 @@ export class FileService {
   async readFile(path: string, opts: { force?: boolean } = {}): Promise<FileReadResult> {
     const full = this.inside(path);
     const { size } = await stat(full);
-    if (await this.looksBinary(full)) return { kind: 'binary' };
+    const encoding = await this.encoding();
+    const head = await this.head(full);
+    // A UTF-16 byte-order mark means UTF-16 whatever the setting; such files are full of zero bytes, so skip the binary check.
+    const utf16 = encoding === 'utf-16' || (head[0] === 0xff && head[1] === 0xfe);
+    if (!utf16 && head.includes(0)) return { kind: 'binary' };
     if (size > MAX_TEXT_BYTES && !opts.force) return { kind: 'too-large', bytes: size };
-    const text = await readFile(full, 'utf8');
+    const bytes = await readFile(full);
+    const text = utf16 ? bytes.toString('utf16le').replace(/^﻿/, '') : bytes.toString(NODE_ENCODINGS[encoding]).replace(/^﻿/, '');
     const firstBreak = text.indexOf('\n');
     const eol = firstBreak > 0 && text[firstBreak - 1] === '\r' ? 'CRLF' : 'LF';
     return { kind: 'text', text, eol };
   }
 
+  /** Saves in the chosen encoding; UTF-16 is written little-endian with a byte-order mark. */
   async writeFile(path: string, text: string): Promise<void> {
-    await writeFile(this.inside(path), text, 'utf8');
+    const encoding = await this.encoding();
+    const data = encoding === 'utf-16' ? Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]) : Buffer.from(text, NODE_ENCODINGS[encoding]);
+    await writeFile(this.inside(path), data);
   }
 
   /** Creates a new file; never overwrites an existing file or folder. */
@@ -107,12 +117,13 @@ export class FileService {
     return full;
   }
 
-  private async looksBinary(path: string): Promise<boolean> {
+  /** The first few KB of a file, for the encoding and binary checks. */
+  private async head(path: string): Promise<Buffer> {
     const handle = await open(path, 'r');
     try {
       const buffer = Buffer.alloc(SNIFF_BYTES);
       const { bytesRead } = await handle.read(buffer, 0, SNIFF_BYTES, 0);
-      return buffer.subarray(0, bytesRead).includes(0);
+      return buffer.subarray(0, bytesRead);
     } finally {
       await handle.close();
     }

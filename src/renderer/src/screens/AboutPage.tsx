@@ -56,7 +56,10 @@ function diagnosticsText(d: Diagnostics): string {
     `${info.os}, locale ${info.locale}`,
     `Marketplace: ${d.marketplaceUrl}`,
     ...info.folders.map((f) => `${f.label}: ${f.path}`),
-    `Languages: ${d.modules.map((m) => `${m.name} ${m.version} (${moduleStatus(m)})`).join(', ') || 'none'}`,
+    ...(['language', 'extension'] as const).map((kind) => {
+      const list = d.modules.filter((m) => m.kind === kind);
+      return `${kind === 'language' ? 'Languages' : 'Extensions'}: ${list.map((m) => `${m.name} ${m.version} (${moduleStatus(m)})`).join(', ') || 'none'}`;
+    }),
     `Themes: ${d.themes.map((t) => `${t.name}${t.version ? ` ${t.version}` : ''}${t.id === d.activeTheme ? ' (active)' : ''}`).join(', ')}`,
   ].join('\n');
 }
@@ -66,7 +69,9 @@ export function AboutPage() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [marketplaceUrl, setMarketplaceUrl] = useState('');
   const [activeTheme, setActiveTheme] = useState<string | null>(null);
-  const modules = useInstalledModules();
+  const languages = useInstalledModules('language');
+  const extensions = useInstalledModules('extension');
+  const modules = [...languages, ...extensions];
   const themes = useInstalledThemes();
   const [copied, setCopied] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -110,8 +115,16 @@ export function AboutPage() {
 
         <section>
           <Heading>Installed languages</Heading>
-          {modules.length === 0 && <p class="m-0 text-muted">None yet.</p>}
-          {modules.map((m) => (
+          {languages.length === 0 && <p class="m-0 text-muted">None yet.</p>}
+          {languages.map((m) => (
+            <ListRow key={m.id} testId={`about-module-${m.id}`} name={<>{m.name} <span class="text-muted font-normal">{m.version}</span></>} status={moduleStatus(m)} />
+          ))}
+        </section>
+
+        <section>
+          <Heading>Installed extensions</Heading>
+          {extensions.length === 0 && <p class="m-0 text-muted">None yet.</p>}
+          {extensions.map((m) => (
             <ListRow key={m.id} testId={`about-module-${m.id}`} name={<>{m.name} <span class="text-muted font-normal">{m.version}</span></>} status={moduleStatus(m)} />
           ))}
         </section>

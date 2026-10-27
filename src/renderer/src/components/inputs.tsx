@@ -33,6 +33,32 @@ export function TextInput({ value, onInput, placeholder, testId, class: cls = ''
   );
 }
 
+interface TextAreaProps {
+  value: string;
+  onInput: (value: string) => void;
+  placeholder?: string;
+  rows?: number;
+  testId?: string;
+  class?: string;
+  onKeyDown?: KeyboardEventHandler<HTMLTextAreaElement>;
+}
+
+/** Multi-line text, e.g. a commit message. */
+export function TextArea({ value, onInput, placeholder, rows = 3, testId, class: cls = '', onKeyDown }: TextAreaProps) {
+  return (
+    <textarea
+      class={`px-2 py-1 bg-editor border border-border text-strong outline-none focus:border-accent placeholder:text-muted resize-none select-text ${cls}`}
+      value={value}
+      rows={rows}
+      placeholder={placeholder}
+      data-testid={testId}
+      spellcheck={false}
+      onInput={(e) => onInput(e.currentTarget.value)}
+      onKeyDown={onKeyDown}
+    />
+  );
+}
+
 interface SelectProps<T extends string> {
   value: T;
   options: { value: T; label: string }[];
@@ -53,14 +79,19 @@ interface CheckboxProps {
   onChange: (checked: boolean) => void;
   label?: string;
   testId?: string;
+  /** Shown as a dash: partly selected, e.g. a folder with some files staged. */
+  indeterminate?: boolean;
 }
 
-export function Checkbox({ checked, onChange, label, testId }: CheckboxProps) {
+export function Checkbox({ checked, onChange, label, testId, indeterminate = false }: CheckboxProps) {
   return (
     <label class="inline-flex items-center gap-2 cursor-pointer">
       <input
         type="checkbox"
         class="size-4 accent-accent cursor-pointer"
+        ref={(el) => {
+          if (el) el.indeterminate = indeterminate;
+        }}
         checked={checked}
         data-testid={testId}
         onChange={(e) => onChange(e.currentTarget.checked)}

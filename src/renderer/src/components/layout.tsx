@@ -19,11 +19,21 @@ export function Badge({ text, class: cls = '' }: { text: string; class?: string 
   );
 }
 
-/** A project's language badges side by side, e.g. PHP + JS. */
-export function LanguageBadges({ badges }: { badges: string[] }) {
+/**
+ * A language's, extension's or theme's picture: its image (installed icon.svg/png, or a Marketplace
+ * image URL). Items without one show nothing. `class` sizes it (18px square by default). `badge` is
+ * only its alt text.
+ */
+export function ModuleIcon({ icon, badge, class: cls = '' }: { icon?: string | null; badge: string; class?: string }) {
+  if (!icon) return null;
+  return <img src={icon} alt={badge} draggable={false} class={`size-[18px] object-contain shrink-0 ${cls}`} />;
+}
+
+/** A project's language icons side by side, e.g. PHP + JS. */
+export function LanguageBadges({ badges }: { badges: { badge: string; icon: string | null }[] }) {
   return (
     <span class="inline-flex gap-0.5 shrink-0" data-testid="language-badges">
-      {badges.map((b) => <Badge key={b} text={b} />)}
+      {badges.map((b) => <ModuleIcon key={b.badge} icon={b.icon} badge={b.badge} />)}
     </span>
   );
 }

@@ -1,13 +1,74 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { Button, CodeIcon, IconButton, PreviewIcon, SplitIcon, TabMenu } from '@renderer/components';
+import { Button, CodeIcon, ContextMenu, IconButton, MoreIcon, NoticesIcon, PreviewIcon, SplitIcon, TabMenu } from '@renderer/components';
+import { useProjectDiagnostics } from '@renderer/panels/builtin/NoticesPanel';
 import { PreviewPane } from '@renderer/preview/PreviewPane';
 import type { ViewMode } from '@renderer/preview/PreviewRegistry';
 import { createEditorState, cursorLabel, languageCompartment } from '@renderer/editor/codemirrorSetup';
 import { refreshHighlighting } from '@renderer/modules/textmate';
 import type { InfoDoc } from '@renderer/editor/EditorDocuments';
 import { useWorkspace } from './EditorWorkspace';
+
+/** Floating at the editor's top right while the project has errors or warnings; opens the Notices panel. */
+function NoticeCount() {
+  const ws = useWorkspace();
+  const { errors, warnings } = useProjectDiagnostics();
+  if (!errors && !warnings) return null;
+  return (
+    <button
+      type="button"
+      data-testid="notice-count"
+      title="Show errors and warnings"
+      onClick={() => ws.layout.show('notices')}
+      class="absolute z-10 top-2 right-4 flex items-center gap-1.5 h-6 px-2 bg-raised border border-border shadow-md shadow-black/30 hover:bg-hover"
+    >
+      <NoticesIcon class={`size-3.5 ${errors ? 'text-accent' : 'text-muted'}`} />
+      {errors > 0 && <span class="text-accent font-semibold">{errors}</span>}
+      {warnings > 0 && <span class="text-muted">{warnings}</span>}
+    </button>
+  );
+}
+
+/**
+ * The "…" at the right of the file tabs: Close All and Close Others. Files with unsaved changes stay
+ * open (closing a tab doesn't ask to save), and the status bar says how many were kept.
+ */
+function TabsMenu() {
+  const ws = useWorkspace();
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLSpanElement>(null);
+  const closeWhere = (keep: (path: string) => boolean) => {
+    const docs = ws.documents;
+    let kept = 0;
+    for (const path of docs.tabOrder()) {
+      if (keep(path)) continue;
+      if (docs.isDirty(path)) kept++;
+      else docs.close(path);
+    }
+    if (kept) ws.notice.value = { text: `Kept ${kept} file${kept === 1 ? '' : 's'} with unsaved changes open`, kind: 'info' };
+  };
+  return (
+    <span ref={anchor} class="relative">
+      <IconButton icon={<MoreIcon />} label="Tab actions" data-testid="tabs-menu" onClick={() => setOpen(!open)} />
+      {open && (
+        <ContextMenu
+          class="top-8 right-0 w-56"
+          anchor={anchor}
+          items={[
+            { id: 'all', label: 'Close All', testId: 'tabs-close-all' },
+            { id: 'others', label: 'Close Others', testId: 'tabs-close-others' },
+          ]}
+          onPick={(id) => {
+            const active = ws.documents.activePath.value;
+            closeWhere(id === 'all' ? () => false : (p) => p === active);
+          }}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </span>
+  );
+}
 
 function InfoView({ info }: { info: InfoDoc }) {
   const ws = useWorkspace();
@@ -122,10 +183,11 @@ export function EditorArea() {
           active={activePath}
           onSelect={(p) => (documents.activePath.value = p)}
           onClose={(p) => documents.close(p)}
-          trailing={modeButtons}
+          trailing={<>{modeButtons}<TabsMenu /></>}
         />
       )}
-      <div class="flex-1 min-h-0 flex">
+      <div class="relative flex-1 min-h-0 flex">
+        <NoticeCount />
         <div class={`relative min-w-0 ${activeDoc && mode !== 'preview' ? 'flex-1' : 'hidden'}`}>
           <div ref={host} class="absolute inset-0" data-testid="code-editor" />
         </div>
