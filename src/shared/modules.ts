@@ -1,5 +1,5 @@
 /** The module API version this build of Saturn implements. Modules declare a compatible range in `saturnApi`. */
-export const SATURN_API_VERSION = '0.2.0';
+export const SATURN_API_VERSION = '0.2.1';
 
 export interface ManifestLanguage {
   id: string;
