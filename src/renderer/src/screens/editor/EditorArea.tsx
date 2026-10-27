@@ -393,7 +393,7 @@ function EditorPane({ group }: { group: number }) {
             <PreviewPane provider={provider} text={activeDoc.text} path={activeDoc.path} projectPath={ws.projectPath} />
           </div>
         )}
-        {activeInfo && <div class="flex-1"><InfoView info={activeInfo} /></div>}
+        {activeInfo && <div class="flex-1 min-w-0"><InfoView info={activeInfo} /></div>}
         {!activeDoc && !activeInfo && (
           <div class="flex-1 flex items-center justify-center text-muted">Open a file from the Project panel.</div>
         )}
