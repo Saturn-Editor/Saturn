@@ -1,6 +1,6 @@
 # Builds Saturn's installers on macOS, Windows and Linux and publishes them to a GitHub Release.
-# Runs when a version tag is pushed (the tag must match package.json's version), e.g.:
-#   npm version 0.1.0 && git push --follow-tags
+# Runs when a version tag is pushed (the tag must match package.json's version). `npm run release`
+# pushes it for package.json's version if that version has no release yet (scripts/release.mjs).
 # Signing is optional: add these repository secrets to sign (and, on macOS, notarize) the builds.
 #   macOS:   CSC_LINK (base64 .p12), CSC_KEY_PASSWORD, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
 #   Windows: WIN_CSC_LINK (base64 .pfx), WIN_CSC_KEY_PASSWORD
