@@ -1,13 +1,18 @@
 import { effect, signal } from '@preact/signals';
 import type { Extension } from '@codemirror/state';
-import type { ContributionSnapshot, LanguageFeature, ModuleLook } from '@shared/modules';
+import type { ContributionSnapshot, EditorSelection, LanguageFeature, ModuleLook } from '@shared/modules';
 import type { AppSettings } from '@shared/types';
 import { ModuleIcon, QuestionIcon } from '@renderer/components';
 import { editorBehaviour } from '@renderer/editor/codemirrorSetup';
 import { ModuleTreePanel } from '@renderer/panels/builtin/ModuleTreePanel';
+import { WebviewPanel } from '@renderer/panels/builtin/WebviewPanel';
 import type { EditorWorkspace } from '@renderer/screens/editor/EditorWorkspace';
 import { languageServerFeatures, receiveDiagnostics, setShowDiagnostics } from './languageServer';
 import { clearGrammars, loadGrammar, textMateHighlighting } from './textmate';
+
+/** How long typing must pause before a file's new text reaches modules, and a selection change. */
+const EDITOR_REPORT_MS = 300;
+const SELECTION_REPORT_MS = 150;
 
 export const EMPTY_SNAPSHOT: ContributionSnapshot = { languages: [], panels: [], commands: [], previews: [], fileTemplates: [], newProject: [], settings: [], buttons: [], debuggers: [] };
 
@@ -112,10 +117,61 @@ export class ModuleBridge {
       }
       open = now;
     });
+    this.reportEditorState();
     api.onRunInTerminal((name, command) => {
       void this.ws.terminals.openTerminal({ name, command }).then(() => this.ws.showTerminal());
     });
     api.onMessage((m) => (this.ws.notice.value = { text: m.message, kind: m.kind }));
+  }
+
+  /**
+   * Keeps modules' `saturn.editor` current: each open file's text (shortly after typing pauses), closed
+   * tabs, and the focused editor's file and selection.
+   */
+  private reportEditorState(): void {
+    const { documents } = this.ws;
+    const report = window.saturn.modules.reportEditor;
+    const sent = new Map<string, string>();
+    const timers = new Map<string, ReturnType<typeof setTimeout>>();
+    effect(() => {
+      const docs = documents.docs.value;
+      for (const doc of docs) {
+        if (sent.get(doc.path) === `${doc.dirty}\0${doc.text}`) continue;
+        clearTimeout(timers.get(doc.path));
+        timers.set(doc.path, setTimeout(() => {
+          const latest = documents.docs.value.find((d) => d.path === doc.path);
+          if (!latest) return;
+          sent.set(latest.path, `${latest.dirty}\0${latest.text}`);
+          report({ type: 'file', file: { path: latest.path, languageId: this.languageFor(latest.path)?.id ?? null, text: latest.text, dirty: latest.dirty } });
+        }, sent.has(doc.path) ? EDITOR_REPORT_MS : 0));
+      }
+      for (const path of [...sent.keys()]) {
+        if (docs.some((d) => d.path === path)) continue;
+        sent.delete(path);
+        clearTimeout(timers.get(path));
+        report({ type: 'closed', path });
+      }
+    });
+    let activeTimer: ReturnType<typeof setTimeout> | undefined;
+    effect(() => {
+      const path = documents.active.value?.path ?? null;
+      void this.ws.cursor.value; // selection moves update the cursor label
+      clearTimeout(activeTimer);
+      activeTimer = setTimeout(() => {
+        const view = this.ws.activeView;
+        const state = view?.state;
+        let selection: EditorSelection | null = null;
+        if (path && state) {
+          const { from, to } = state.selection.main;
+          const at = (pos: number) => {
+            const line = state.doc.lineAt(pos);
+            return { line: line.number - 1, character: pos - line.from };
+          };
+          selection = { text: state.sliceDoc(from, to), start: at(from), end: at(to) };
+        }
+        report({ type: 'active', path, selection });
+      }, SELECTION_REPORT_MS);
+    });
   }
 
   languageFor(path: string): LanguageInfo | undefined {
@@ -180,7 +236,7 @@ export class ModuleBridge {
         icon: panel.iconUrl ? <ModuleIcon icon={panel.iconUrl} badge={panel.title} /> : <QuestionIcon />,
         defaultDock: panel.dock,
         source: panel.moduleId,
-        render: () => <ModuleTreePanel panelId={panel.id} />,
+        render: () => (panel.kind === 'webview' ? <WebviewPanel panelId={panel.id} /> : <ModuleTreePanel panelId={panel.id} />),
       }));
     }
     for (const t of snapshot.fileTemplates) {
