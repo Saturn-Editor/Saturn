@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { fieldApplies, settingDefaults, type ContributionSnapshot, type SettingValues } from '@shared/modules';
 import {
-  Badge, Button, Checkbox, DialogFooter, FieldInput, ModuleIcon, FormField, Heading, SidebarFooterButton, SidebarMenu, TabMenu, TextInput, TitleBar,
+  Badge, Button, Checkbox, DialogFooter, FieldInput, ModuleIcon, FormField, Heading, Select, SidebarFooterButton, SidebarMenu, TabMenu, TextInput, TitleBar,
 } from '@renderer/components';
 import { EMPTY_SNAPSHOT } from '@renderer/modules/ModuleBridge';
 
@@ -9,7 +9,8 @@ const PLAIN_TEXT = 'plain-text';
 
 /**
  * New Project: Plain Text or an installed language in the sidebar. A language can offer templates in
- * tabs along the top (e.g. C#: Empty solution, .NET, Web, MAUI) and fields that apply only to some of
+ * tabs along the top (e.g. C#: Empty solution, .NET, Web, MAUI), each tab a Template dropdown with the
+ * chosen template's description under it, and fields that apply only to some of
  * them. Creating can take a while; the language's progress messages show on the Create button's left.
  */
 export function NewProjectScreen() {
@@ -46,6 +47,7 @@ export function NewProjectScreen() {
   }, [kind, language]);
 
   const currentTab = language?.tabs?.find((t) => t.id === tab);
+  const currentTemplate = currentTab?.templates.find((t) => t.id === template);
   const choice = { tab, template };
   const shownFields = (language?.fields ?? []).filter((f) => fieldApplies(f, choice));
 
@@ -54,7 +56,13 @@ export function NewProjectScreen() {
     if (picked) setParentDir(picked);
   };
 
-  const create = async () => {
+  // Opened from an editor: Create first asks whether to open the project in that window or a new one.
+  const opener = window.saturn.window.projectPath;
+  const openerName = opener?.split(/[\\/]/).pop();
+  const [choosing, setChoosing] = useState(false);
+
+  const create = async (replace = false) => {
+    setChoosing(false);
     setBusy(true);
     setError(null);
     setProgress(null);
@@ -63,7 +71,9 @@ export function NewProjectScreen() {
     if (tab) sent.tab = tab;
     if (template) sent.template = template;
     try {
-      await window.saturn.projects.create({ name, parentDir, gitInit, languageId: language?.language ?? null, fields: sent });
+      await window.saturn.projects.create({
+        name, parentDir, gitInit, languageId: language?.language ?? null, fields: sent, ...(replace && opener && { replaceProject: opener }),
+      });
     } catch (e) {
       // Electron prefixes IPC errors with "Error invoking remote method '…': Error: ".
       setError(String((e as Error).message).replace(/^.*Error: /, ''));
@@ -98,24 +108,11 @@ export function NewProjectScreen() {
                   setTemplate(language.tabs!.find((t) => t.id === id)?.templates[0]?.id);
                 }}
               />
-              <div class="grid grid-cols-2 gap-2 p-4 pb-0" role="listbox" aria-label="Templates" data-testid="new-templates">
-                {currentTab?.templates.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    role="option"
-                    aria-selected={t.id === template}
-                    data-testid={`new-template-${t.id}`}
-                    onClick={() => setTemplate(t.id)}
-                    class={`flex items-start gap-2.5 p-2.5 text-left border ${t.id === template ? 'border-accent bg-selection' : 'border-border hover:bg-hover'}`}
-                  >
-                    {t.icon ? <ModuleIcon icon={t.icon} badge={t.label} class="size-6 shrink-0" /> : <Badge text={t.label.slice(0, 2)} class="size-6" />}
-                    <span class="min-w-0">
-                      <span class="block font-semibold text-strong">{t.label}</span>
-                      {t.description && <span class="block text-muted text-[11px]">{t.description}</span>}
-                    </span>
-                  </button>
-                ))}
+              <div class="p-4 pb-0" data-testid="new-template">
+                <FormField label="Template">
+                  <Select value={template ?? ''} options={(currentTab?.templates ?? []).map((t) => ({ value: t.id, label: t.label }))} onChange={setTemplate} />
+                </FormField>
+                {currentTemplate?.description && <p class="-mt-1.5 mb-0 ml-[152px] text-muted text-[11px]">{currentTemplate.description}</p>}
               </div>
             </>
           )}
@@ -151,10 +148,28 @@ export function NewProjectScreen() {
       <DialogFooter>
         {busy && <span class="flex-1 truncate text-muted" data-testid="new-progress">{progress ?? 'Creating…'}</span>}
         <Button onClick={() => window.saturn.window.close()}>Cancel</Button>
-        <Button variant="primary" testId="new-create" disabled={busy || (!!language?.tabs?.length && !template)} onClick={() => void create()}>
+        <Button
+          variant="primary"
+          testId="new-create"
+          disabled={busy || (!!language?.tabs?.length && !template)}
+          onClick={() => (opener ? setChoosing(true) : void create())}
+        >
           {busy ? 'Creating…' : 'Create'}
         </Button>
       </DialogFooter>
+      {choosing && (
+        <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/40" data-testid="new-open-choice" onKeyDown={(e) => e.key === 'Escape' && setChoosing(false)}>
+          <div class="w-96 p-4 bg-raised border border-border shadow-lg shadow-black/40 flex flex-col gap-3">
+            <div class="font-semibold text-strong">Open {name.trim() || 'the new project'}</div>
+            <p class="m-0 text-muted">In this window closes {openerName}.</p>
+            <div class="flex justify-end gap-2">
+              <Button onClick={() => setChoosing(false)}>Cancel</Button>
+              <Button testId="new-open-new-window" onClick={() => void create(false)}>New window</Button>
+              <Button variant="primary" testId="new-open-here" onClick={() => void create(true)}>This window</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

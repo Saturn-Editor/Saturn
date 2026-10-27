@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { ContributionSnapshot, ModuleLook } from '@shared/modules';
 import type { RecentProject } from '@shared/types';
-import { Button, FormField, LanguageBadges, Logo, SidebarMenu, TextInput } from '@renderer/components';
+import { Button, ContextMenu, FormField, LanguageBadges, Logo, SidebarMenu, TextInput } from '@renderer/components';
 import { EMPTY_SNAPSHOT, projectBadges } from '@renderer/modules/ModuleBridge';
 import { AboutPage } from './AboutPage';
 import { MarketplaceScreen } from './MarketplaceScreen';
@@ -13,14 +13,43 @@ type Page = 'projects' | 'marketplace' | 'settings' | 'help' | 'about';
 type LocalPage = Page;
 
 
-function ProjectRow({ project, badges, onOpen, onRemove }: { project: RecentProject; badges: ModuleLook[]; onOpen: () => void; onRemove: () => void }) {
-  const [confirming, setConfirming] = useState(false);
+/**
+ * A recent project. Click opens it; right-click offers Open, Remove from list and Delete, each of the
+ * last two confirmed in a row under the project. A missing folder offers removal.
+ */
+function ProjectRow({ project, badges, onOpen, onRemove, onDelete }: {
+  project: RecentProject;
+  badges: ModuleLook[];
+  onOpen: () => void;
+  onRemove: () => void;
+  onDelete: () => Promise<void>;
+}) {
+  const [confirming, setConfirming] = useState<'remove' | 'delete' | null>(null);
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const pick = (id: string) => {
+    setProblem(null);
+    if (id === 'open') onOpen();
+    if (id === 'remove' || id === 'delete') setConfirming(id);
+  };
+  const remove = () => {
+    setConfirming(null);
+    onRemove();
+  };
+  const del = () => {
+    setConfirming(null);
+    void onDelete().catch((e) => setProblem(String((e as Error).message).replace(/^.*Error: /, '')));
+  };
   return (
     <div class="hover:bg-hover">
       <div
         role="button"
         data-testid="recent-project"
-        onClick={() => (project.missing ? setConfirming(true) : onOpen())}
+        onClick={() => (project.missing ? setConfirming('remove') : onOpen())}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenuAt({ x: e.clientX, y: e.clientY });
+        }}
         class={`flex items-center gap-2 px-2.5 py-1.5 cursor-pointer ${project.missing ? 'text-muted' : ''}`}
       >
         <span class={`font-semibold shrink-0 ${project.missing ? '' : 'text-strong'}`}>{project.name}</span>
@@ -28,13 +57,33 @@ function ProjectRow({ project, badges, onOpen, onRemove }: { project: RecentProj
         {/* The project's language icons, pinned to the right. */}
         <LanguageBadges badges={badges} />
       </div>
-      {confirming && (
-        <div class="flex items-center gap-2 px-2.5 pb-2">
-          <span class="text-muted">This folder no longer exists.</span>
-          <Button onClick={onRemove}>Remove from list</Button>
-          <Button onClick={() => setConfirming(false)}>Cancel</Button>
+      {menuAt && (
+        <ContextMenu
+          at={menuAt}
+          items={[
+            ...(project.missing ? [] : [{ id: 'open', label: 'Open', testId: 'project-menu-open' }]),
+            { id: 'remove', label: 'Remove from list…', testId: 'project-menu-remove' },
+            ...(project.missing ? [] : [{ separator: true } as const, { id: 'delete', label: 'Delete…', testId: 'project-menu-delete' }]),
+          ]}
+          onPick={pick}
+          onClose={() => setMenuAt(null)}
+        />
+      )}
+      {confirming === 'remove' && (
+        <div class="flex items-center gap-2 px-2.5 pb-2" data-testid="project-remove-confirm">
+          <span class="text-muted">{project.missing ? 'This folder no longer exists.' : 'Remove from the list? The folder stays on disk.'}</span>
+          <Button onClick={remove}>Remove from list</Button>
+          <Button onClick={() => setConfirming(null)}>Cancel</Button>
         </div>
       )}
+      {confirming === 'delete' && (
+        <div class="flex items-center gap-2 px-2.5 pb-2" data-testid="project-delete-confirm">
+          <span class="text-accent">Move the whole folder to the Trash, including anything not committed or pushed?</span>
+          <Button testId="project-delete-go" onClick={del}>Delete</Button>
+          <Button onClick={() => setConfirming(null)}>Cancel</Button>
+        </div>
+      )}
+      {problem && <p class="m-0 px-2.5 pb-2 text-accent" role="alert">{problem}</p>}
     </div>
   );
 }
@@ -145,6 +194,10 @@ export function WelcomeScreen() {
               badges={badgesFor(p)}
               onOpen={() => void open(p)}
               onRemove={() => void window.saturn.projects.removeRecent(p.path).then(load)}
+              onDelete={async () => {
+                await window.saturn.projects.deleteProject(p.path);
+                load();
+              }}
             />
           ))}
           {projects.length === 0 && <p class="text-muted px-2.5">No recent projects yet. Create or open one to get started.</p>}

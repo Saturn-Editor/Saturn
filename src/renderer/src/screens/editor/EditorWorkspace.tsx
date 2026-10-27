@@ -40,6 +40,8 @@ export class EditorWorkspace {
   /** A message in the status bar (from a module, or a problem); click to dismiss. */
   readonly notice = signal<{ text: string; kind: MessageKind } | null>(null);
   readonly modules = new ModuleBridge(this);
+  /** Something just done that can be undone (a deleted file), shown with an Undo button by UndoToast. */
+  readonly undo = signal<{ text: string; run: () => Promise<void>; at: number } | null>(null);
   /** A branch switch waiting for the user to choose what happens to uncommitted changes (see BranchSwitchPrompt). */
   readonly branchSwitchPrompt = signal<{ branch: string; resolve: (mode: 'bring' | 'shelve' | null) => void } | null>(null);
   /** Requests from the Project panel's title-bar buttons; the panel acts on each new one. */

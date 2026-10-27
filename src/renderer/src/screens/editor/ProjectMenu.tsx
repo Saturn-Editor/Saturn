@@ -4,12 +4,12 @@ import { Button, ChevronDownIcon, ContextMenu, type MenuEntry } from '@renderer/
 import { useWorkspace } from './EditorWorkspace';
 
 const CLOSE = '\0close';
-const HOME = '\0home';
+const NEW = '\0new';
 
 /**
- * The project name in the top bar. Its menu has Home (the Welcome window, to create, open or clone a
- * project), Close Project, then the other recent projects. Picking one asks whether to open it in this
- * window (closing this project, with the usual unsaved-changes prompt) or a new one.
+ * The project name in the top bar. Its menu has New Project (which asks, on Create, whether to open it
+ * here or in a new window), Close Project, then the other recent projects. Picking one asks whether to
+ * open it in this window (closing this project, with the usual unsaved-changes prompt) or a new one.
  */
 export function ProjectMenu() {
   const ws = useWorkspace();
@@ -25,14 +25,14 @@ export function ProjectMenu() {
 
   const others = recent.filter((p) => p.path !== ws.projectPath && !p.missing);
   const items: MenuEntry[] = [
-    { id: HOME, label: 'Home', hint: 'New, open or clone a project', testId: 'project-home' },
+    { id: NEW, label: 'New Project…', testId: 'project-new' },
     { id: CLOSE, label: 'Close Project', testId: 'project-close' },
     ...(others.length ? [{ separator: true } as const, { group: 'Switch to' } as const] : []),
     ...others.map((p) => ({ id: p.path, label: p.name, hint: p.path, testId: `project-switch-${p.name}` })),
   ];
 
   const pick = (id: string) => {
-    if (id === HOME) return window.saturn.windows.openWelcome();
+    if (id === NEW) return window.saturn.windows.openNewProject();
     if (id === CLOSE) return window.saturn.window.close();
     setChoosing(others.find((p) => p.path === id) ?? null);
   };

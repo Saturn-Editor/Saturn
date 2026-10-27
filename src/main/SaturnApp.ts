@@ -16,6 +16,7 @@ import { NotificationService } from './Services/NotificationService';
 import { UpdateService } from './Services/UpdateService';
 import { DebugService } from './Services/DebugService';
 import { AskpassService } from './Services/AskpassService';
+import { TrashService } from './Services/TrashService';
 import { setAskpass } from './Services/GitService';
 import { BreakpointStore } from './Store/BreakpointStore';
 import { CodeModuleService } from './Services/CodeModuleService';
@@ -128,6 +129,9 @@ export class SaturnApp {
       },
     });
     await askpass.start().then(() => setAskpass((projectPath) => askpass.env(projectPath)), (e) => console.error('Git sign-in prompts unavailable', e));
+    // Deleting files: held for Undo, then sent to the system Trash.
+    const trash = new TrashService(paths.dir('deleted'));
+    await trash.start().catch((e) => console.error('Clearing held deletions failed', e));
     const marketplace = new MarketplaceService(modules, themes, async () => (await settings.app()).marketplaceUrl);
     const languageServers = new LanguageServerService({
       diagnostics: (projectPath, path, diagnostics) => router?.sendToProject(projectPath, 'languages', 'diagnostics', path, diagnostics),
@@ -177,6 +181,7 @@ export class SaturnApp {
       updates,
       debug,
       askpass,
+      trash,
       marketplace,
       reset: () => resetSaturn(),
     });
@@ -210,7 +215,7 @@ export class SaturnApp {
       askpass.stop();
       if (shutDown) return;
       event.preventDefault();
-      void host.shutdown().finally(() => {
+      void Promise.all([host.shutdown(), trash.finishAll()]).finally(() => {
         shutDown = true;
         app.quit();
       });

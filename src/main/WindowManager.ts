@@ -93,8 +93,10 @@ export class WindowManager {
     return this.openSingle('settings', parent, section ? { section } : {});
   }
 
+  /** Opened from an editor, the window knows its project, so it can offer to open the new one in its place. */
   openNewProject(parent: BrowserWindow): BrowserWindow {
-    return this.openSingle('new-project', parent, {});
+    const from = this.projectOf(parent);
+    return this.openSingle('new-project', parent, from ? { project: from } : {});
   }
 
   openMarketplace(parent: BrowserWindow, section?: string): BrowserWindow {

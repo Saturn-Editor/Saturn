@@ -227,6 +227,8 @@ export interface SaturnApi {
     openDialog(): Promise<void>;
     openPath(path: string): Promise<'opened' | 'missing'>;
     removeRecent(path: string): Promise<void>;
+    /** Moves a recent project's folder to the Trash and forgets it (callers confirm first). Rejects while it's open. */
+    deleteProject(path: string): Promise<void>;
     pickFolder(): Promise<string | null>;
     pickFile(): Promise<string | null>;
     /** Clones a repository into a new folder inside `parentDir`, then opens it. */
@@ -263,8 +265,10 @@ export interface SaturnApi {
     createDir(path: string): Promise<void>;
     /** Renames in place; resolves to the new path. */
     rename(path: string, newName: string): Promise<string>;
-    /** Confirms with the user, then moves to the Trash; false if they cancelled. */
-    trash(path: string): Promise<boolean>;
+    /** Deletes without asking; resolves to an id that `undoTrash` accepts for 30 seconds, after which it's in the system Trash. */
+    trash(path: string): Promise<string>;
+    /** Puts a deleted file or folder back; resolves to its path. */
+    undoTrash(id: string): Promise<string>;
     /** Shows the file or folder in Finder / Explorer. */
     reveal(path: string): Promise<void>;
     onChanged(cb: (dir: string) => void): Unsubscribe;

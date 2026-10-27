@@ -16,6 +16,7 @@ import type { NotificationService } from './Services/NotificationService';
 import type { UpdateService } from './Services/UpdateService';
 import type { DebugService } from './Services/DebugService';
 import type { AskpassService } from './Services/AskpassService';
+import type { TrashService } from './Services/TrashService';
 import type { CodeModuleService } from './Services/CodeModuleService';
 import type { ProjectCreator } from './Services/ProjectCreator';
 import type { TerminalService } from './Services/TerminalService';
@@ -44,6 +45,7 @@ export interface SaturnServices {
   updates: UpdateService;
   debug: DebugService;
   askpass: AskpassService;
+  trash: TrashService;
   /** Wipes Saturn's data and starts over as on a first launch (Settings → Reset Saturn, after confirming). */
   reset: () => Promise<void>;
 }
@@ -368,6 +370,13 @@ export class IpcRouter {
 
     this.handle('projects', 'recent', () => recent.list());
     this.handle('projects', 'removeRecent', (_e, path: string) => recent.remove(path));
+    /** Moves a recent project's folder to the Trash and forgets it (the Welcome screen confirms first). */
+    this.handle('projects', 'deleteProject', async (_e, path: string) => {
+      if (!(await recent.list()).some((p) => p.path === path)) throw new Error('Only recent projects can be deleted here');
+      if (windows.editorFor(path)) throw new Error(`Close ${basename(path)} before deleting it`);
+      await shell.trashItem(path);
+      await recent.remove(path);
+    });
     this.handle('projects', 'openPath', async (_e, path: string) => {
       const exists = await stat(path).then((s) => s.isDirectory(), () => false);
       if (!exists) return 'missing';
@@ -403,6 +412,7 @@ export class IpcRouter {
       }
       await openProject(path, req.languageId);
       sender.close();
+      if (req.replaceProject) windows.editorFor(req.replaceProject)?.close();
     });
     // Clone into a new folder in parentDir, then open it like any project.
     this.handle('projects', 'clone', async (_e, url: string, parentDir: string) => {
@@ -472,22 +482,9 @@ export class IpcRouter {
     this.handle('fs', 'createFile', (e, path: string, text?: string) => this.filesFor(e).createFile(path, text));
     this.handle('fs', 'createDir', (e, path: string) => this.filesFor(e).createDir(path));
     this.handle('fs', 'rename', (e, path: string, newName: string) => this.filesFor(e).rename(path, newName));
-    /** Asks first, then moves the file or folder to the Trash (recoverable); false if the user cancelled. */
-    this.handle('fs', 'trash', async (e, path: string) => {
-      const full = this.filesFor(e).entry(path);
-      const bin = process.platform === 'win32' ? 'Recycle Bin' : 'Trash';
-      const { response } = await dialog.showMessageBox(this.senderWindow(e), {
-        type: 'warning',
-        message: `Move "${basename(full)}" to the ${bin}?`,
-        detail: `You can restore it from the ${bin}.`,
-        buttons: [`Move to ${bin}`, 'Cancel'],
-        defaultId: 0,
-        cancelId: 1,
-      });
-      if (response !== 0) return false;
-      await shell.trashItem(full);
-      return true;
-    });
+    /** Deletes without asking; Undo (`undoTrash` with the returned id) can bring it back for 30 seconds. */
+    this.handle('fs', 'trash', (e, path: string) => this.services.trash.remove(this.filesFor(e).entry(path)));
+    this.handle('fs', 'undoTrash', (_e, id: string) => this.services.trash.undo(id));
     this.handle('fs', 'reveal', (e, path: string) => {
       const root = this.projectOf(e);
       shell.showItemInFolder(resolve(root, path) === resolve(root) ? root : this.filesFor(e).entry(path));

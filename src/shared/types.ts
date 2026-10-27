@@ -243,6 +243,8 @@ export interface NewProjectRequest {
   languageId: string | null;
   /** Values of the language's New Project fields, by field id. */
   fields: Record<string, string | boolean>;
+  /** Open the new project in place of this one: its window closes (with the usual unsaved-changes prompt). */
+  replaceProject?: string;
 }
 
 export type DockId = 'left' | 'bottom';
