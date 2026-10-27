@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { Button, CodeIcon, ContextMenu, IconButton, MoreIcon, NoticesIcon, PreviewIcon, SplitIcon, TabMenu } from '@renderer/components';
-import { useProjectDiagnostics } from '@renderer/panels/builtin/NoticesPanel';
+import { diagnosticCounts, onDiagnosticCounts } from '@renderer/modules/languageServer';
 import { PreviewPane } from '@renderer/preview/PreviewPane';
 import type { ViewMode } from '@renderer/preview/PreviewRegistry';
 import { createEditorState, cursorLabel, languageCompartment, runEditorCommand } from '@renderer/editor/codemirrorSetup';
@@ -14,10 +14,13 @@ import type { InfoDoc } from '@renderer/editor/EditorDocuments';
 import { DiffView } from './DiffView';
 import { useWorkspace } from './EditorWorkspace';
 
-/** Floating at the editor's top right while the project has errors or warnings; opens the Notices panel. */
+/** Floating at the editor's top right while the open file has errors or warnings; opens the Notices panel. */
 function NoticeCount() {
   const ws = useWorkspace();
-  const { errors, warnings } = useProjectDiagnostics();
+  const [, setVersion] = useState(0);
+  useEffect(() => onDiagnosticCounts(() => setVersion((n) => n + 1)), []);
+  const path = ws.documents.activePath.value;
+  const { errors, warnings } = path ? diagnosticCounts(path) : { errors: 0, warnings: 0 };
   if (!errors && !warnings) return null;
   return (
     <button

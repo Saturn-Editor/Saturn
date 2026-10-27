@@ -9,8 +9,9 @@ const DELETE = '\0delete';
 const REMOTES = '\0remotes';
 const REBASE = '\0rebase';
 const TAGS = '\0tags';
+const RENAME = '\0rename';
 
-type Form = 'create' | 'merge' | 'rebase' | 'delete' | 'remotes' | 'tags' | null;
+type Form = 'create' | 'merge' | 'rebase' | 'delete' | 'rename' | 'remotes' | 'tags' | null;
 
 /** A small panel under the branch menu (New branch, Merge, Delete, Remotes). */
 function FormBox({ title, testId, children }: { title: string; testId: string; children: preact.ComponentChildren }) {
@@ -131,19 +132,25 @@ export function BranchMenu() {
       return;
     }
     if (id === MERGE || id === DELETE || id === REBASE) {
-      setTarget(others[0] ?? '');
+      setTarget(others[0] ?? status.branch ?? '');
       setForce(false);
       setForm(id === MERGE ? 'merge' : id === REBASE ? 'rebase' : 'delete');
       return;
     }
     if (id === REMOTES) return setForm('remotes');
     if (id === TAGS) return setForm('tags');
+    if (id === RENAME) {
+      setName(status.branch ?? '');
+      return setForm('rename');
+    }
     if (id !== status.branch) void window.saturn.git.checkout(id).catch((e) => setProblem(errorText(e)));
   };
 
   const done = (task: Promise<void>) => void task.then(() => setForm(null), (e) => setProblem(errorText(e)));
   const create = () => done(window.saturn.git.createBranch(name));
   const branchSelect = <Select value={target} options={others.map((b) => ({ value: b, label: b }))} onChange={setTarget} />;
+  // Delete can also take the current branch (Saturn switches to main first, keeping pending changes).
+  const deleteSelect = <Select value={target} options={branches.map((b) => ({ value: b, label: b === status.branch ? `${b} (current)` : b }))} onChange={setTarget} />;
 
   const items: MenuEntry[] = [
     { group: 'Branches' },
@@ -154,7 +161,8 @@ export function BranchMenu() {
       { id: MERGE, label: `Merge into ${status.branch ?? 'HEAD'}…`, testId: 'branch-merge' },
       { id: REBASE, label: `Rebase ${status.branch ?? 'HEAD'} onto…`, testId: 'branch-rebase' },
       { id: DELETE, label: 'Delete branch…', testId: 'branch-delete' },
-    ] : []),
+      { id: RENAME, label: `Rename ${status.branch ?? 'branch'}…`, testId: 'branch-rename' },
+    ] : [{ id: RENAME, label: `Rename ${status.branch ?? 'branch'}…`, testId: 'branch-rename' }]),
     { separator: true },
     { id: TAGS, label: 'Tags…', testId: 'branch-tags' },
     { id: REMOTES, label: 'Remotes…', testId: 'branch-remotes' },
@@ -207,7 +215,8 @@ export function BranchMenu() {
       )}
       {form === 'delete' && (
         <FormBox title="Delete branch" testId="branch-delete-form">
-          {branchSelect}
+          {deleteSelect}
+          {target === status.branch && <p class="m-0 text-muted">Saturn switches to main (or another branch) first, bringing your pending changes.</p>}
           <label class="flex items-center gap-2">
             <Checkbox checked={force} onChange={() => setForce(!force)} />
             <span>Delete even if it has unmerged commits</span>
@@ -227,6 +236,19 @@ export function BranchMenu() {
           <div class="flex justify-end gap-2">
             <Button onClick={() => setForm(null)}>Cancel</Button>
             <Button variant="primary" testId="branch-rebase-go" disabled={!target} onClick={() => done(window.saturn.git.rebase(target))}>Rebase</Button>
+          </div>
+        </FormBox>
+      )}
+      {form === 'rename' && status.branch && (
+        <FormBox title={`Rename ${status.branch}`} testId="branch-rename-form">
+          <TextInput value={name} onInput={setName} testId="branch-rename-name" autoFocus onKeyDown={(e) => {
+            if (e.key === 'Enter') done(window.saturn.git.renameBranch(status.branch!, name));
+            if (e.key === 'Escape') setForm(null);
+          }} />
+          {problem && <p class="m-0 text-accent" role="alert">{problem}</p>}
+          <div class="flex justify-end gap-2">
+            <Button onClick={() => setForm(null)}>Cancel</Button>
+            <Button variant="primary" testId="branch-rename-go" onClick={() => done(window.saturn.git.renameBranch(status.branch!, name))}>Rename</Button>
           </div>
         </FormBox>
       )}

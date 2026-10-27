@@ -141,7 +141,15 @@ export class IpcRouter {
     changing('commit', (git, message: string) => git.commit(message));
     changing('checkout', (git, branch: string) => git.checkout(branch));
     changing('createBranch', (git, name: string) => git.createBranch(name));
-    changing('push', (git) => git.push());
+    // Pushing can take a while, so finishing posts a notification (which also pops up).
+    const pushed = async (git: GitService, what: string) => {
+      const { branch } = await git.status().catch(() => ({ branch: null }));
+      this.services.notifications.add({ moduleId: 'saturn', title: what === 'tags' ? 'Tags pushed' : `Pushed ${branch ?? 'branch'}`, message: what === 'tags' ? '' : `Your commits are on ${what}.` });
+    };
+    changing('push', async (git) => {
+      await git.push();
+      await pushed(git, (await git.status()).upstream ?? 'the remote');
+    });
     changing('pull', (git) => git.pull());
     this.handle('git', 'diff', (e, path: string, hash?: string) => gitFor(e).diff(path, hash));
     this.handle('git', 'stashes', (e) => gitFor(e).stashes());
@@ -158,7 +166,10 @@ export class IpcRouter {
     changing('createTag', (git, name: string, hash?: string, message?: string) => git.createTag(name, hash, message));
     changing('renameTag', (git, from: string, to: string) => git.renameTag(from, to));
     changing('deleteTag', (git, name: string) => git.deleteTag(name));
-    changing('pushTags', (git) => git.pushTags());
+    changing('pushTags', async (git) => {
+      await git.pushTags();
+      await pushed(git, 'tags');
+    });
     this.handle('git', 'workingDiff', (e, path: string) => gitFor(e).workingDiff(path));
     changing('applyHunk', (git, patch: string, unstage: boolean) => git.applyHunk(patch, unstage));
     changing('resolveWith', (git, path: string, side: 'ours' | 'theirs') => git.resolveWith(path, side));
@@ -167,7 +178,10 @@ export class IpcRouter {
     changing('dropStash', (git, ref: string) => git.dropStash(ref));
     changing('addRemote', (git, name: string, url: string) => git.addRemote(name, url));
     changing('removeRemote', (git, name: string) => git.removeRemote(name));
-    changing('pushTo', (git, remote: string) => git.pushTo(remote));
+    changing('pushTo', async (git, remote: string) => {
+      await git.pushTo(remote);
+      await pushed(git, remote);
+    });
     this.handle('git', 'answerCredential', (_e, id: string, answer: string | null) => this.services.askpass.answer(id, answer));
   }
 

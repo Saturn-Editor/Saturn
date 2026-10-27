@@ -1,5 +1,5 @@
 import type { DockId } from '@shared/types';
-import { Splitter } from '@renderer/components';
+import { CloseIcon, IconButton, Splitter } from '@renderer/components';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
 import { PANEL_DRAG_TYPE } from './IconStrip';
 
@@ -25,7 +25,10 @@ export function Dock({ dock }: { dock: DockId }) {
       }}
     >
       <span class="flex-1 truncate">{def.title}</span>
-      {def.actions && <span class="flex items-center gap-0.5 font-normal -mr-1.5">{def.actions()}</span>}
+      <span class="flex items-center gap-0.5 font-normal -mr-1.5">
+        {def.actions?.()}
+        <IconButton class="size-6" icon={<CloseIcon class="size-3" />} label={`Close ${def.title}`} data-testid={`panel-close-${def.id}`} onClick={() => ws.layout.toggle(def.id)} />
+      </span>
     </div>
   );
 
