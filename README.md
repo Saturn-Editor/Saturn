@@ -3,7 +3,7 @@
 </center>
 
 # Say hello to Saturn
-A lightweight, highly customisable code editor.
+A lightweight, highly customisable code editor. It's so good, we use it to make it.
 
 # Language support
 Saturn has modules for C#/.NET, Data and Storage formats, and Markdown.
