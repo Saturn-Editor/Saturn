@@ -69,17 +69,31 @@ jobs:
 
       - run: npm run build
 
+      # Signing variables are only set when their secrets exist: electron-builder reads an empty
+      # CSC_LINK as a path (the project folder) and fails, so unsigned builds must leave it unset.
       - name: Build installers and publish to the GitHub Release
-        run: npx electron-builder --publish always
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then link="$MAC_CSC_LINK"; password="$MAC_CSC_KEY_PASSWORD"; else link="$WIN_CSC_LINK"; password="$WIN_CSC_KEY_PASSWORD"; fi
+          if [ -n "$link" ]; then
+            export CSC_LINK="$link" CSC_KEY_PASSWORD="$password"
+          else
+            echo "No signing certificate set: building unsigned."
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
+          if [ "$RUNNER_OS" = "macOS" ] && [ -n "$NOTARIZE_APPLE_ID" ]; then
+            export APPLE_ID="$NOTARIZE_APPLE_ID" APPLE_APP_SPECIFIC_PASSWORD="$NOTARIZE_PASSWORD" APPLE_TEAM_ID="$NOTARIZE_TEAM_ID"
+          fi
+          npx electron-builder --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ matrix.os == 'macos-latest' && secrets.CSC_LINK || secrets.WIN_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ matrix.os == 'macos-latest' && secrets.CSC_KEY_PASSWORD || secrets.WIN_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Unsigned builds are fine when the signing secrets aren't set.
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}
+          MAC_CSC_LINK: ${{ secrets.CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          NOTARIZE_APPLE_ID: ${{ secrets.APPLE_ID }}
+          NOTARIZE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          NOTARIZE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
   publish:
     needs: [check, build]
