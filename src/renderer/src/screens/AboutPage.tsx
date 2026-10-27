@@ -115,7 +115,7 @@ export function AboutPage() {
 
         <section>
           <Heading>Installed languages</Heading>
-          {languages.length === 0 && <p class="m-0 text-muted">None yet.</p>}
+          {languages.length === 0 && <p class="m-0 text-muted">None.</p>}
           {languages.map((m) => (
             <ListRow key={m.id} testId={`about-module-${m.id}`} name={<>{m.name} <span class="text-muted font-normal">{m.version}</span></>} status={moduleStatus(m)} />
           ))}
@@ -123,7 +123,7 @@ export function AboutPage() {
 
         <section>
           <Heading>Installed extensions</Heading>
-          {extensions.length === 0 && <p class="m-0 text-muted">None yet.</p>}
+          {extensions.length === 0 && <p class="m-0 text-muted">None.</p>}
           {extensions.map((m) => (
             <ListRow key={m.id} testId={`about-module-${m.id}`} name={<>{m.name} <span class="text-muted font-normal">{m.version}</span></>} status={moduleStatus(m)} />
           ))}

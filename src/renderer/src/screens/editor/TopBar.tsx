@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import { GearIcon, IconButton, LanguageBadges } from '@renderer/components';
+import { DebugIcon, GearIcon, IconButton, LanguageBadges } from '@renderer/components';
 import { ActionSearch } from '@renderer/commands/ActionSearch';
 import { projectBadges } from '@renderer/modules/ModuleBridge';
 import { RunMenu } from '@renderer/screens/editor/RunMenu';
@@ -27,6 +27,13 @@ export function TopBar() {
       <ActionSearch />
       <div class="flex items-center gap-2 flex-1 justify-end">
         <RunMenu />
+        <IconButton
+          icon={<DebugIcon />}
+          label={ws.debug.state.value.state === 'stopped' ? 'Continue' : 'Debug the open file'}
+          active={ws.debug.state.value.state !== 'idle'}
+          data-testid="debug-button"
+          onClick={() => void ws.startDebugging()}
+        />
         <NotificationsMenu />
         <IconButton icon={<GearIcon />} label="Settings" onClick={() => window.saturn.windows.openSettings()} />
       </div>

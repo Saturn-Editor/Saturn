@@ -1,4 +1,4 @@
-import type { KeymapId } from './keymaps';
+import type { CustomKeymap, KeymapChoice } from './keymaps';
 
 export type WindowKind = 'welcome' | 'editor' | 'settings' | 'new-project' | 'marketplace' | 'onboarding';
 
@@ -31,6 +31,43 @@ export interface GitStatus {
   ahead: number;
   behind: number;
   changes: GitChange[];
+  /** A merge, rebase, cherry-pick or revert that stopped (usually on conflicts) and is waiting to be continued or aborted. */
+  operation: GitOperation | null;
+  /** Files with unresolved conflicts. */
+  conflicts: string[];
+}
+
+export type GitOperation = 'merge' | 'rebase' | 'cherry-pick' | 'revert';
+
+export interface GitTag {
+  name: string;
+  /** The commit it points at (short hash). */
+  commit: string;
+  /** An annotated tag's message, else empty. */
+  message: string;
+}
+
+/** A file's uncommitted changes, split by what's staged (index vs last commit) and what isn't (working tree vs index). */
+export interface WorkingDiff {
+  staged: string;
+  unstaged: string;
+  /** New, untracked file: its whole content shows as unstaged and hunks can't be staged separately. */
+  untracked: boolean;
+}
+
+/** A saved stash. `shelf` is the branch a branch switch shelved it for, else null. */
+export interface GitStash {
+  ref: string;
+  branch: string | null;
+  message: string;
+  /** ISO date. */
+  date: string;
+  shelf: string | null;
+}
+
+export interface GitRemote {
+  name: string;
+  url: string;
 }
 
 export interface GitCommit {
@@ -42,6 +79,53 @@ export interface GitCommit {
   subject: string;
   /** Branch and tag names pointing at it, e.g. "HEAD -> main", "origin/main". */
   refs: string[];
+}
+
+/**
+ * Saturn's own updates (from GitHub Releases); "unavailable" in development builds. "available" means
+ * a new version exists but must be downloaded by hand (an unsigned macOS build can't install updates).
+ */
+export interface UpdateStatus {
+  state: 'unavailable' | 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'error';
+  version?: string;
+  percent?: number;
+  message?: string;
+  /** For "available": the release page to download it from. */
+  downloadUrl?: string;
+}
+
+/** A stack frame of the paused program; `line` and `column` are 1-based, `path` null for code without a file. */
+export interface DebugFrame {
+  id: number;
+  name: string;
+  path: string | null;
+  line: number;
+  column: number;
+}
+
+/** A variable's name and value; `ref` is non-zero when it has children (fetched with `debug.variables`). */
+export interface DebugVariable {
+  name: string;
+  value: string;
+  type?: string;
+  ref: number;
+}
+
+export interface DebugScope {
+  name: string;
+  variables: DebugVariable[];
+}
+
+/** The project's debug session: nothing, starting, running, or paused with its stack and the selected frame's variables. */
+export interface DebugState {
+  state: 'idle' | 'starting' | 'running' | 'stopped';
+  /** What's being debugged, e.g. "Program.cs (.NET Core)". */
+  name?: string;
+  /** Why it paused, e.g. "breakpoint", "step", "exception". */
+  reason?: string;
+  frames: DebugFrame[];
+  frameId?: number;
+  scopes: DebugScope[];
 }
 
 /** Version and environment details for About → Diagnostics. */
@@ -67,12 +151,20 @@ export interface AppSettings {
   completion: boolean;
   /** Errors and warnings from language servers, underlined in the editor with gutter markers. */
   diagnostics: boolean;
-  /** Which set of keyboard shortcuts to use. */
-  keymap: KeymapId;
+  /** Which set of keyboard shortcuts to use: a built-in keymap, or "custom:<id>". */
+  keymap: KeymapChoice;
+  /** The user's own keymaps (Settings → Keymap → Duplicate). */
+  customKeymaps: CustomKeymap[];
+  /** Typing an opening bracket or quote also inserts the closer. */
+  autoCloseBrackets: boolean;
+  /** Saving a file (Save File) formats it first with its language server, where the language supports it. */
+  formatOnSave: boolean;
   /** Interface and editor text size as a percentage (100 is the default); scales every window. */
   textSize: number;
   /** How files are read and saved. */
   encoding: FileEncoding;
+  /** Look for updates at launch and every few hours: Saturn's own (packaged builds only), and installed languages, extensions and themes. */
+  autoUpdate: boolean;
   /** "typing": every 2s while there are changes; "idle": once typing stops, and on closing a tab or leaving the window; "off". */
   autoSave: 'typing' | 'idle' | 'off';
   /** Enter keeps the current line's indentation (and the language's extra indent). */
@@ -81,6 +173,8 @@ export interface AppSettings {
   indentWith: 'spaces' | 'tab';
   /** Spaces per indent level when indenting with spaces. */
   indentSize: 2 | 4 | 8;
+  /** The user's choice of how files with a preview open (code, split or preview), by preview id. */
+  defaultViews: Record<string, 'code' | 'split' | 'preview'>;
   /** The marketplace index URL; the official one unless the user changed it. */
   marketplaceUrl: string;
 }

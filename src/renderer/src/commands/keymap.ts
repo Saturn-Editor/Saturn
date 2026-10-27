@@ -1,20 +1,30 @@
 import { signal } from '@preact/signals';
-import { bindingFor, formatBinding, KEYMAP_ACTIONS, matchesBinding, type KeymapId } from '@shared/keymaps';
+import { formatBinding, KEYMAP_ACTIONS, matchesBinding, resolveBinding, type CustomKeymap, type KeymapChoice } from '@shared/keymaps';
 
 export const isMac = navigator.userAgent.includes('Mac');
 
-/** The keymap chosen in Settings, kept in sync across windows. */
-export const keymapId = signal<KeymapId>('os');
+/** The keymap chosen in Settings (built-in or custom), and the user's custom keymaps, kept in sync across windows. */
+export const keymapId = signal<KeymapChoice>('os');
+export const customKeymaps = signal<CustomKeymap[]>([]);
 
-/** Loads the keymap setting and follows changes to it. Call once per window before rendering. */
+/** Loads the keymap settings and follows changes to them. Call once per window before rendering. */
 export async function followKeymap(): Promise<void> {
-  keymapId.value = (await window.saturn.settings.get()).keymap;
-  window.saturn.settings.onChanged((s) => (keymapId.value = s.keymap));
+  const apply = (s: { keymap: KeymapChoice; customKeymaps: CustomKeymap[] }) => {
+    keymapId.value = s.keymap;
+    customKeymaps.value = s.customKeymaps;
+  };
+  apply(await window.saturn.settings.get());
+  window.saturn.settings.onChanged(apply);
+}
+
+/** An action's key in the current keymap, or null. */
+function currentBinding(actionId: string): string | null {
+  return resolveBinding(actionId, keymapId.value, customKeymaps.value, isMac);
 }
 
 /** An action's shortcut in the current keymap as people read it ("⌘⇧A"), or null if it has none. */
 export function shortcutFor(actionId: string): string | null {
-  const binding = bindingFor(actionId, keymapId.value, isMac);
+  const binding = currentBinding(actionId);
   return binding ? formatBinding(binding, isMac) : null;
 }
 
@@ -22,7 +32,7 @@ export function shortcutFor(actionId: string): string | null {
 export function actionForKey(e: KeyboardEvent, scope: 'app' | 'editor'): string | null {
   for (const action of KEYMAP_ACTIONS) {
     if (action.scope !== scope) continue;
-    const binding = bindingFor(action.id, keymapId.value, isMac);
+    const binding = currentBinding(action.id);
     if (binding && matchesBinding(e, binding, isMac)) return action.id;
   }
   return null;

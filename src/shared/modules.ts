@@ -11,12 +11,52 @@ export interface ManifestLanguage {
   scopeName?: string;
 }
 
+export type LanguageFeature =
+  | 'completion' | 'diagnostics' | 'hover' | 'definition' | 'symbols' | 'references' | 'rename' | 'formatting' | 'signatureHelp';
+
+export const LANGUAGE_FEATURES: { id: LanguageFeature; label: string }[] = [
+  { id: 'completion', label: 'Code completion' },
+  { id: 'diagnostics', label: 'Error checking' },
+  { id: 'hover', label: 'Hover information' },
+  { id: 'definition', label: 'Go to definition' },
+  { id: 'symbols', label: 'Outline' },
+  { id: 'references', label: 'Find usages' },
+  { id: 'rename', label: 'Rename' },
+  { id: 'formatting', label: 'Formatting' },
+  { id: 'signatureHelp', label: 'Parameter hints' },
+];
+
+/** The module setting key holding a language feature's on/off switch (true unless turned off). */
+export function featureKey(feature: LanguageFeature): string {
+  return `feature:${feature}`;
+}
+
 export interface ManifestLanguageServer {
   languages: string[];
   /** "node" means Saturn's bundled runtime; anything else is resolved from PATH. */
   command: string;
   /** "${setting:<id>}" in the command or an argument is replaced by that module setting's value. */
   args?: string[];
+  /** What the server supports; each gets an on/off switch in the language's Settings tab. All of them when left out. */
+  features?: LanguageFeature[];
+}
+
+/**
+ * A debugger (a Debug Adapter Protocol adapter speaking over stdio). Start Debugging runs it for a
+ * file in one of `languages` and sends `launch` as the DAP launch arguments.
+ */
+export interface ManifestDebugger {
+  /** Shown in the Debug panel, e.g. ".NET Core". */
+  label: string;
+  languages: string[];
+  /** As for language servers: "node" is Saturn's runtime; "${setting:<id>}" is replaced. */
+  command: string;
+  args?: string[];
+  /**
+   * DAP launch arguments. In string values, "${file}" is the file being debugged, "${project}" the
+   * project folder, and "${setting:<id>}" a module setting.
+   */
+  launch: Record<string, unknown>;
 }
 
 export interface ManifestPanel {
@@ -32,10 +72,14 @@ export interface ManifestCommand {
   title: string;
 }
 
+export type ViewMode = 'code' | 'split' | 'preview';
+
 export interface ManifestPreview {
   id: string;
   label: string;
   extensions: string[];
+  /** How these files open: code only (the default), code and preview side by side, or preview only. The user can change it. */
+  defaultView?: ViewMode;
 }
 
 export interface ManifestFileTemplate {
@@ -133,6 +177,7 @@ export interface LanguageManifest extends CodeModuleManifest {
   contributes?: CommonContributions & {
     languages?: ManifestLanguage[];
     languageServer?: ManifestLanguageServer;
+    debugger?: ManifestDebugger;
     previews?: ManifestPreview[];
     fileTemplates?: ManifestFileTemplate[];
     newProject?: ManifestNewProject;
@@ -170,7 +215,8 @@ export interface ModuleLook {
 }
 
 export interface ContributionSnapshot {
-  languages: (ManifestLanguage & ModuleLook & { moduleId: string; hasServer: boolean })[];
+  /** `features`: what its server supports and the user hasn't switched off (empty without a server). */
+  languages: (ManifestLanguage & ModuleLook & { moduleId: string; hasServer: boolean; features: LanguageFeature[] })[];
   /** `iconUrl` is the panel's own icon file, else the module's icon, else null (shown as "?"). */
   panels: (ManifestPanel & { moduleId: string; iconUrl: string | null })[];
   commands: (ManifestCommand & ModuleLook & { moduleId: string; moduleName: string })[];
@@ -178,9 +224,11 @@ export interface ContributionSnapshot {
   fileTemplates: (ManifestFileTemplate & { moduleId: string })[];
   newProject: (ManifestNewProject & ModuleLook & { moduleId: string; languageName: string })[];
   /** One Settings tab per module that declares settings. */
-  settings: (ModuleLook & { moduleId: string; moduleName: string; items: ManifestSetting[] })[];
+  settings: (ModuleLook & { moduleId: string; moduleName: string; items: ManifestSetting[]; features: LanguageFeature[] })[];
   /** Buttons on the editor's right-hand bar; `iconUrl` as for panels. */
   buttons: (ManifestButton & { moduleId: string; iconUrl: string | null })[];
+  /** Languages that can be debugged, and with which module's debugger. */
+  debuggers: { moduleId: string; label: string; languages: string[] }[];
 }
 
 export type MessageKind = 'info' | 'warning' | 'error';
@@ -191,6 +239,12 @@ export interface NotificationAction {
   command?: string;
   openSettings?: boolean;
   url?: string;
+  /** Saturn's own: restart to install a downloaded Saturn update. */
+  installUpdate?: boolean;
+  /** Saturn's own: open the Marketplace on a section. */
+  openMarketplace?: 'languages' | 'themes' | 'extensions';
+  /** Saturn's own: install every available update for installed languages, extensions and themes. */
+  updateAll?: boolean;
 }
 
 /** An entry in the editor's notifications menu (the bell next to Settings). */
@@ -274,6 +328,67 @@ export interface SourceLocation {
   path: string;
   line: number;
   column: number;
+}
+
+/** A file and its current text, for requests about the whole document (outline, formatting). */
+export interface DocumentRequest {
+  path: string;
+  languageId: string;
+  text: string;
+}
+
+/** Something defined in a file (LSP DocumentSymbol); `kind` is the LSP SymbolKind number. */
+export interface DocumentSymbol {
+  name: string;
+  detail?: string;
+  kind: number;
+  /** Where its name is: what the outline jumps to. */
+  range: TextRange;
+  children: DocumentSymbol[];
+}
+
+/** One usage from Find Usages: where it is, and that line's text. */
+export interface ReferenceLocation {
+  path: string;
+  range: TextRange;
+  preview: string;
+}
+
+/** Replace `range` with `newText` (LSP TextEdit). */
+export interface TextEdit {
+  range: TextRange;
+  newText: string;
+}
+
+/** Edits to one file, e.g. from a rename. */
+export interface FileEdits {
+  path: string;
+  edits: TextEdit[];
+}
+
+/** Parameter hints for the call around the cursor: the signature, and which part of it is the current parameter. */
+export interface SignatureHelp {
+  label: string;
+  documentation?: string;
+  /** Start and end offsets of the current parameter within `label`, or null. */
+  activeParameter: [number, number] | null;
+}
+
+/** Applies LSP edits (positions in the original text) to a text. */
+export function applyTextEdits(text: string, edits: TextEdit[]): string {
+  const lineStarts = [0];
+  for (let i = 0; i < text.length; i++) if (text[i] === '\n') lineStarts.push(i + 1);
+  const offset = (line: number, character: number) => {
+    if (line >= lineStarts.length) return text.length;
+    const end = line + 1 < lineStarts.length ? lineStarts[line + 1] - 1 : text.length;
+    return Math.min(lineStarts[line] + character, end);
+  };
+  const spans = edits
+    .map((e) => ({ from: offset(e.range.line, e.range.character), to: offset(e.range.endLine, e.range.endCharacter), text: e.newText }))
+    .sort((a, b) => b.from - a.from || b.to - a.to);
+  let result = text;
+  for (const s of spans) result = result.slice(0, s.from) + s.text + result.slice(s.to);
+  return result;
 }
 
 /**

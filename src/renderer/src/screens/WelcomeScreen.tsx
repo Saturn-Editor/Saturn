@@ -6,8 +6,9 @@ import { EMPTY_SNAPSHOT, projectBadges } from '@renderer/modules/ModuleBridge';
 import { AboutPage } from './AboutPage';
 import { MarketplaceScreen } from './MarketplaceScreen';
 import { SettingsScreen } from './SettingsScreen';
+import {HelpPage} from "@renderer/screens/HelpPage";
 
-type Page = 'projects' | 'marketplace' | 'settings' | 'about';
+type Page = 'projects' | 'marketplace' | 'settings' | 'help' | 'about';
 /** Every page shows inside the Welcome window; Settings and Marketplace are the same screens as their own windows. */
 type LocalPage = Page;
 
@@ -116,12 +117,16 @@ export function WelcomeScreen() {
           { id: 'marketplace', label: 'Marketplace' },
           { id: 'settings', label: 'Settings' },
         ]}
-        bottomItems={[{ id: 'about', label: 'About' }]}
+        bottomItems={[
+          { id: 'about', label: 'About' },
+          { id: 'help', label: 'Help' }
+        ]}
         selected={page}
         onSelect={select}
       />
       {page === 'settings' && <div class="flex-1 min-w-0" data-testid="welcome-settings"><SettingsScreen embedded /></div>}
       {page === 'marketplace' && <div class="flex-1 min-w-0" data-testid="welcome-marketplace"><MarketplaceScreen embedded /></div>}
+      {page === 'help' && <HelpPage />}
       {page === 'about' && <AboutPage />}
       {page === 'projects' && (
       <main class="flex-1 flex flex-col p-3.5 min-w-0">

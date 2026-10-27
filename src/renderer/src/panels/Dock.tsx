@@ -24,7 +24,8 @@ export function Dock({ dock }: { dock: DockId }) {
         if (id) ws.layout.move(id, dock, state.panels.length);
       }}
     >
-      {def.title}
+      <span class="flex-1 truncate">{def.title}</span>
+      {def.actions && <span class="flex items-center gap-0.5 font-normal -mr-1.5">{def.actions()}</span>}
     </div>
   );
 

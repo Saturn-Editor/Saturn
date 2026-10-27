@@ -1,15 +1,14 @@
 import { useEffect, useState } from 'preact/hooks';
-import type { MarketplaceLanguage } from '@shared/marketplace';
-import { SATURN_API_VERSION, satisfiesCaret } from '@shared/modules';
+import { chooseVersion, type MarketplaceEntry } from '@shared/marketplace';
 import { Button, Checkbox, DialogFooter, Heading, Logo, ModuleIcon } from '@renderer/components';
-import { isUpToDate, MarketplaceEntries, useInstalledModules, useMarketplaceIndex } from '@renderer/screens/MarketplaceIndex';
+import { isUpToDate, MarketplaceEntries, useInstalledModules, useMarketplaceList } from '@renderer/screens/MarketplaceIndex';
 import { ModeToggle } from '@renderer/theme/ModeToggle';
 
 function errorText(e: unknown): string {
   return String((e as Error).message).replace(/^.*Error: /, '');
 }
 
-function LanguagePicker({ entries, selected, onToggle }: { entries: MarketplaceLanguage[]; selected: Set<string>; onToggle: (id: string, on: boolean) => void }) {
+function LanguagePicker({ entries, selected, onToggle }: { entries: MarketplaceEntry[]; selected: Set<string>; onToggle: (id: string, on: boolean) => void }) {
   return (
     <div class="flex flex-col">
       {entries.map((l) => (
@@ -28,17 +27,18 @@ function LanguagePicker({ entries, selected, onToggle }: { entries: MarketplaceL
 
 /** First-launch popup: pick Light or Dark and which marketplace languages to install. */
 export function OnboardingScreen() {
-  const [index, reloadIndex] = useMarketplaceIndex();
+  const [list, reloadList] = useMarketplaceList('languages');
   const installed = useInstalledModules();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const installable = (i: { languages: MarketplaceLanguage[] }) => i.languages.filter((l) => satisfiesCaret(l.saturnApi, SATURN_API_VERSION));
-  // Languages marked `default` in the index start ticked.
+  // Only languages with a version this Saturn can install are offered.
+  const installable = (entries: MarketplaceEntry[]) => entries.filter((l) => chooseVersion(l).installable);
+  // Languages marked `default` in the marketplace start ticked.
   useEffect(() => {
-    if (index?.status === 'loaded') setSelected(new Set(installable(index.index).filter((l) => l.default).map((l) => l.id)));
-  }, [index]);
+    if (list?.status === 'loaded') setSelected(new Set(installable(list.entries).filter((l) => l.default).map((l) => l.id)));
+  }, [list]);
 
   const toggle = (id: string, on: boolean) => {
     const next = new Set(selected);
@@ -48,8 +48,8 @@ export function OnboardingScreen() {
   };
 
   const finish = async () => {
-    const chosen = index?.status === 'loaded'
-      ? installable(index.index).filter((l) => selected.has(l.id) && !isUpToDate(installed, l))
+    const chosen = list?.status === 'loaded'
+      ? installable(list.entries).filter((l) => selected.has(l.id) && !isUpToDate(installed, l))
       : [];
     const failed: string[] = [];
     setError(null);
@@ -81,11 +81,11 @@ export function OnboardingScreen() {
         <section>
           <Heading>Languages</Heading>
           <MarketplaceEntries
-            state={index}
-            pick={installable}
+            state={list}
+            filter={(l) => !!chooseVersion(l).installable}
             hide={(l) => isUpToDate(installed, l)}
             allHidden="All available languages are already installed."
-            onRetry={reloadIndex}
+            onRetry={reloadList}
           >
             {(entries) => <LanguagePicker entries={entries} selected={selected} onToggle={toggle} />}
           </MarketplaceEntries>

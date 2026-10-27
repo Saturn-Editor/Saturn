@@ -20,6 +20,17 @@ import search from '../../../../resources/icons/search.svg?raw';
 import split from '../../../../resources/icons/split.svg?raw';
 import stop from '../../../../resources/icons/stop.svg?raw';
 import terminal from '../../../../resources/icons/terminal.svg?raw';
+import outline from '../../../../resources/icons/outline.svg?raw';
+import usages from '../../../../resources/icons/usages.svg?raw';
+import debug from '../../../../resources/icons/debug.svg?raw';
+import stepOver from '../../../../resources/icons/step-over.svg?raw';
+import stepInto from '../../../../resources/icons/step-into.svg?raw';
+import stepOut from '../../../../resources/icons/step-out.svg?raw';
+import continueRun from '../../../../resources/icons/continue.svg?raw';
+import pause from '../../../../resources/icons/pause.svg?raw';
+import expandAll from '../../../../resources/icons/expand-all.svg?raw';
+import collapseAll from '../../../../resources/icons/collapse-all.svg?raw';
+import refresh from '../../../../resources/icons/refresh.svg?raw';
 
 type IconProps = { class?: string };
 
@@ -52,4 +63,15 @@ export const SplitIcon = svgIcon(split);
 export const PreviewIcon = svgIcon(preview);
 export const FileIcon = svgIcon(file);
 /** Shown for a module's panel or button that has no icon. */
+export const OutlineIcon = svgIcon(outline);
+export const UsagesIcon = svgIcon(usages);
+export const DebugIcon = svgIcon(debug);
+export const StepOverIcon = svgIcon(stepOver);
+export const StepIntoIcon = svgIcon(stepInto);
+export const StepOutIcon = svgIcon(stepOut);
+export const ContinueIcon = svgIcon(continueRun);
+export const PauseIcon = svgIcon(pause);
+export const ExpandAllIcon = svgIcon(expandAll);
+export const CollapseAllIcon = svgIcon(collapseAll);
+export const RefreshIcon = svgIcon(refresh);
 export const QuestionIcon = svgIcon(question);

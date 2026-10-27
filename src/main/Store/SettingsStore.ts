@@ -1,4 +1,12 @@
-import { KEYMAPS, type KeymapId } from '@shared/keymaps';
+import { CUSTOM_PREFIX, KEYMAPS, type CustomKeymap, type KeymapChoice } from '@shared/keymaps';
+
+function isCustomKeymap(v: unknown): v is CustomKeymap {
+  const k = v as CustomKeymap;
+  return typeof k === 'object' && k !== null && typeof k.id === 'string' && /^[\w-]+$/.test(k.id) &&
+    typeof k.name === 'string' && k.name.trim() !== '' && KEYMAPS.some((b) => b.id === k.base) &&
+    typeof k.bindings === 'object' && k.bindings !== null &&
+    Object.values(k.bindings).every((b) => b === null || typeof b === 'string');
+}
 import { MARKETPLACE_INDEX_URL } from '@shared/marketplace';
 import { FILE_ENCODINGS, TEXT_SIZES, type AppSettings, type FileEncoding, type ThemeMode } from '@shared/types';
 import { FileStore } from './FileStore';
@@ -13,10 +21,15 @@ export interface Settings {
   completion?: boolean;
   /** A replacement marketplace index URL; unset means the official one. */
   marketplaceUrl?: string;
-  keymap?: KeymapId;
+  defaultViews?: Record<string, 'code' | 'split' | 'preview'>;
+  keymap?: KeymapChoice;
+  customKeymaps?: CustomKeymap[];
+  autoCloseBrackets?: boolean;
+  formatOnSave?: boolean;
   textSize?: number;
   encoding?: FileEncoding;
   autoSave?: 'typing' | 'idle' | 'off';
+  autoUpdate?: boolean;
   diagnostics?: boolean;
   autoIndent?: boolean;
   indentWith?: 'spaces' | 'tab';
@@ -49,14 +62,19 @@ export class SettingsStore {
     return {
       completion: s.completion ?? true,
       keymap: s.keymap ?? 'os',
+      customKeymaps: s.customKeymaps ?? [],
+      autoCloseBrackets: s.autoCloseBrackets ?? true,
+      formatOnSave: s.formatOnSave ?? false,
       textSize: s.textSize ?? 100,
       encoding: s.encoding ?? 'utf-8',
       diagnostics: s.diagnostics ?? true,
       autoSave: s.autoSave ?? 'idle',
+      autoUpdate: s.autoUpdate ?? true,
       autoIndent: s.autoIndent ?? true,
       indentWith: s.indentWith ?? 'spaces',
       indentSize: s.indentSize ?? 4,
       marketplaceUrl: s.marketplaceUrl ?? MARKETPLACE_INDEX_URL,
+      defaultViews: s.defaultViews ?? {},
     };
   }
 
@@ -76,20 +94,32 @@ export class SettingsStore {
         marketplaceUrl = url.href;
       }
     }
-    if (change.keymap !== undefined && !KEYMAPS.some((k) => k.id === change.keymap)) throw new Error(`Unknown keymap: ${change.keymap}`);
+    const customs = change.customKeymaps ?? (await this.app()).customKeymaps;
+    if (change.customKeymaps !== undefined && !change.customKeymaps.every(isCustomKeymap)) throw new Error('Custom keymaps are not valid');
+    const knownKeymap = (k: string) => KEYMAPS.some((b) => b.id === k) || customs.some((c) => `${CUSTOM_PREFIX}${c.id}` === k);
+    if (change.keymap !== undefined && !knownKeymap(change.keymap)) throw new Error(`Unknown keymap: ${change.keymap}`);
+    // Deleting the selected custom keymap falls back to its base.
+    const current = (await this.store.read()).keymap;
+    const fallback = change.customKeymaps !== undefined && change.keymap === undefined && current && !knownKeymap(current) ? 'os' : undefined;
     if (change.textSize !== undefined && !(TEXT_SIZES as readonly number[]).includes(change.textSize)) throw new Error(`Unsupported text size: ${change.textSize}%`);
     await this.store.update((s) => ({
       ...s,
       ...(change.completion !== undefined && { completion: change.completion }),
       ...(change.keymap !== undefined && { keymap: change.keymap }),
+      ...(fallback && { keymap: fallback }),
+      ...(change.customKeymaps !== undefined && { customKeymaps: change.customKeymaps }),
+      ...(change.autoCloseBrackets !== undefined && { autoCloseBrackets: change.autoCloseBrackets }),
+      ...(change.formatOnSave !== undefined && { formatOnSave: change.formatOnSave }),
       ...(change.textSize !== undefined && { textSize: change.textSize }),
       ...(change.encoding !== undefined && FILE_ENCODINGS.some((e) => e.id === change.encoding) && { encoding: change.encoding }),
       ...(change.diagnostics !== undefined && { diagnostics: change.diagnostics }),
+      ...(change.autoUpdate !== undefined && { autoUpdate: change.autoUpdate }),
       ...(change.autoSave !== undefined && ['typing', 'idle', 'off'].includes(change.autoSave) && { autoSave: change.autoSave }),
       ...(change.autoIndent !== undefined && { autoIndent: change.autoIndent }),
       ...(change.indentWith !== undefined && { indentWith: change.indentWith === 'tab' ? 'tab' : 'spaces' }),
       ...(change.indentSize !== undefined && { indentSize: ([2, 4, 8] as const).find((n) => n === change.indentSize) ?? 4 }),
       ...(change.marketplaceUrl !== undefined && { marketplaceUrl }),
+      ...(change.defaultViews !== undefined && { defaultViews: change.defaultViews }),
     }));
     return this.app();
   }

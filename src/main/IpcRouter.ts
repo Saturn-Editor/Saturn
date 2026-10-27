@@ -1,17 +1,21 @@
-import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { channel } from '@shared/api';
-import { SATURN_API_VERSION, type CompletionRequest, type SettingValue, type TreeItem } from '@shared/modules';
+import type { MarketplaceKind } from '@shared/marketplace';
+import { SATURN_API_VERSION, type CompletionRequest, type DocumentRequest, type SettingValue, type TreeItem } from '@shared/modules';
 import type { AppFolder, AppInfo, AppSettings, LayoutState, NewProjectRequest, RunEntry, ThemeMode } from '@shared/types';
-import { RESET_MARKER, type AppPaths } from './Helpers/AppPaths';
+import type { AppPaths } from './Helpers/AppPaths';
 import type { ExtensionHostService } from './Services/ExtensionHostService';
 import { FileService } from './Services/FileService';
 import { GitService } from './Services/GitService';
 import type { LanguageServerService } from './Services/LanguageServerService';
 import type { MarketplaceService } from './Services/MarketplaceService';
 import type { NotificationService } from './Services/NotificationService';
+import type { UpdateService } from './Services/UpdateService';
+import type { DebugService } from './Services/DebugService';
+import type { AskpassService } from './Services/AskpassService';
 import type { CodeModuleService } from './Services/CodeModuleService';
 import type { ProjectCreator } from './Services/ProjectCreator';
 import type { TerminalService } from './Services/TerminalService';
@@ -37,6 +41,11 @@ export interface SaturnServices {
   settings: SettingsStore;
   paths: AppPaths;
   notifications: NotificationService;
+  updates: UpdateService;
+  debug: DebugService;
+  askpass: AskpassService;
+  /** Wipes Saturn's data and starts over as on a first launch (Settings → Reset Saturn, after confirming). */
+  reset: () => Promise<void>;
 }
 
 type Handler = (event: IpcMainInvokeEvent, ...args: any[]) => unknown;
@@ -62,6 +71,30 @@ export class IpcRouter {
     this.registerApp();
     this.registerGit();
     this.registerNotifications();
+    this.registerUpdates();
+    this.registerDebug();
+  }
+
+  private registerDebug(): void {
+    const { debug } = this.services;
+    this.handle('debug', 'state', (e) => debug.state(this.projectOf(e)));
+    this.handle('debug', 'breakpoints', (e) => debug.breakpointsFor(this.projectOf(e)));
+    this.handle('debug', 'setBreakpoints', (e, path: string, lines: number[]) => debug.setBreakpoints(this.projectOf(e), path, lines));
+    this.handle('debug', 'start', (e, req: { path: string; languageId: string }) => debug.start(this.projectOf(e), req));
+    this.handle('debug', 'stop', (e) => debug.stop(this.projectOf(e)));
+    for (const action of ['continue', 'next', 'stepIn', 'stepOut', 'pause'] as const) {
+      this.handle('debug', action, (e) => debug.control(this.projectOf(e), action));
+    }
+    this.handle('debug', 'selectFrame', (e, frameId: number) => debug.selectFrame(this.projectOf(e), frameId));
+    this.handle('debug', 'variables', (e, ref: number) => debug.variables(this.projectOf(e), ref));
+    this.handle('debug', 'evaluate', (e, expression: string) => debug.evaluate(this.projectOf(e), expression));
+  }
+
+  private registerUpdates(): void {
+    const { updates } = this.services;
+    this.handle('updates', 'status', () => updates.current());
+    this.handle('updates', 'check', () => updates.check());
+    this.handle('updates', 'install', () => updates.install());
   }
 
   private registerNotifications(): void {
@@ -75,8 +108,15 @@ export class IpcRouter {
       const n = notifications.get(id);
       const action = n?.actions[index];
       if (!n || !action) return;
-      if (action.command) await host.runCommand(action.command, { projectPath: this.projectOf(e) });
+      if (action.installUpdate && n.moduleId === 'saturn') this.services.updates.install();
+      else if (action.command) await host.runCommand(action.command, { projectPath: this.projectOf(e) });
       else if (action.openSettings) windows.openSettings(this.senderWindow(e), `module:${n.moduleId}`);
+      else if (action.openMarketplace) windows.openMarketplace(this.senderWindow(e), action.openMarketplace);
+      else if (action.updateAll && n.moduleId === 'saturn') {
+        const { marketplace } = this.services;
+        await marketplace.installUpdates(await marketplace.availableUpdates());
+        notifications.dismiss(id);
+      }
       else if (action.url?.startsWith('https://')) await shell.openExternal(action.url);
     });
   }
@@ -91,7 +131,8 @@ export class IpcRouter {
       });
     };
     this.handle('git', 'status', (e) => gitFor(e).status());
-    this.handle('git', 'log', (e) => gitFor(e).log());
+    this.handle('git', 'log', (e, ref?: string) => gitFor(e).log(200, ref));
+    this.handle('git', 'remoteBranches', (e) => gitFor(e).remoteBranches());
     this.handle('git', 'show', (e, hash: string) => gitFor(e).show(hash));
     this.handle('git', 'branches', (e) => gitFor(e).branches());
     changing('init', (git) => git.init());
@@ -102,6 +143,32 @@ export class IpcRouter {
     changing('createBranch', (git, name: string) => git.createBranch(name));
     changing('push', (git) => git.push());
     changing('pull', (git) => git.pull());
+    this.handle('git', 'diff', (e, path: string, hash?: string) => gitFor(e).diff(path, hash));
+    this.handle('git', 'stashes', (e) => gitFor(e).stashes());
+    this.handle('git', 'remotes', (e) => gitFor(e).remotes());
+    changing('renameBranch', (git, from: string, to: string) => git.renameBranch(from, to));
+    changing('deleteBranch', (git, name: string, force?: boolean) => git.deleteBranch(name, force));
+    changing('merge', (git, name: string) => git.merge(name));
+    changing('abortOperation', (git) => git.abortOperation());
+    changing('continueOperation', (git) => git.continueOperation());
+    changing('rebase', (git, onto: string) => git.rebase(onto));
+    changing('cherryPick', (git, hash: string) => git.cherryPick(hash));
+    changing('revert', (git, hash: string) => git.revert(hash));
+    this.handle('git', 'tags', (e) => gitFor(e).tags());
+    changing('createTag', (git, name: string, hash?: string, message?: string) => git.createTag(name, hash, message));
+    changing('renameTag', (git, from: string, to: string) => git.renameTag(from, to));
+    changing('deleteTag', (git, name: string) => git.deleteTag(name));
+    changing('pushTags', (git) => git.pushTags());
+    this.handle('git', 'workingDiff', (e, path: string) => gitFor(e).workingDiff(path));
+    changing('applyHunk', (git, patch: string, unstage: boolean) => git.applyHunk(patch, unstage));
+    changing('resolveWith', (git, path: string, side: 'ours' | 'theirs') => git.resolveWith(path, side));
+    changing('stash', (git, message: string) => git.stash(message));
+    changing('applyStash', (git, ref: string, pop: boolean) => git.applyStash(ref, pop));
+    changing('dropStash', (git, ref: string) => git.dropStash(ref));
+    changing('addRemote', (git, name: string, url: string) => git.addRemote(name, url));
+    changing('removeRemote', (git, name: string) => git.removeRemote(name));
+    changing('pushTo', (git, remote: string) => git.pushTo(remote));
+    this.handle('git', 'answerCredential', (_e, id: string, answer: string | null) => this.services.askpass.answer(id, answer));
   }
 
   private registerApp(): void {
@@ -125,21 +192,19 @@ export class IpcRouter {
       locale: app.getLocale(),
       folders: Object.entries(folders).map(([id, f]) => ({ id: id as AppFolder, ...f })),
     }));
-    // Reset Saturn: after confirming, mark the data folder for wiping and relaunch. SaturnApp wipes it
-    // on startup, before anything has it open. Project folders on disk are never touched.
+    // Reset Saturn: after confirming, SaturnApp wipes Saturn's own data and starts over in place.
+    // Project folders on disk are never touched.
     this.handle('app', 'reset', async (e) => {
       const { response } = await dialog.showMessageBox(this.senderWindow(e), {
         type: 'warning',
         message: 'Reset Saturn?',
-        detail: 'This removes all settings, installed languages, extensions and themes, and the recent projects list, then restarts Saturn as new. Your project folders on disk are not touched.',
-        buttons: ['Reset and restart', 'Cancel'],
+        detail: 'This removes all settings, installed languages, extensions and themes, and the recent projects list, closes every window without saving, and starts Saturn over as new. Your project folders on disk are not touched.',
+        buttons: ['Reset Saturn', 'Cancel'],
         defaultId: 1,
         cancelId: 1,
       });
       if (response !== 0) return false;
-      await writeFile(join(paths.root, RESET_MARKER), '');
-      app.relaunch();
-      app.exit(0);
+      await this.services.reset();
       return true;
     });
     // Only the folders listed above can be opened, never an arbitrary path from the renderer.
@@ -159,6 +224,7 @@ export class IpcRouter {
       const next = await settings.updateApp(change);
       if (change.marketplaceUrl !== undefined) marketplace.forgetIndex();
       if (change.textSize !== undefined) this.services.windows.setZoom(next.textSize / 100);
+      if (change.autoUpdate !== undefined) this.services.updates.setAutomatic(next.autoUpdate);
       this.broadcast('settings', 'changed', next);
       return next;
     });
@@ -166,7 +232,7 @@ export class IpcRouter {
 
   private registerMarketplace(): void {
     const { marketplace } = this.services;
-    this.handle('marketplace', 'index', () => marketplace.fetchIndex());
+    this.handle('marketplace', 'list', (_e, kind: MarketplaceKind) => marketplace.fetchList(kind));
     this.handle('marketplace', 'installLanguage', (_e, id: string) => marketplace.installModule('language', id));
     this.handle('marketplace', 'installExtension', (_e, id: string) => marketplace.installModule('extension', id));
     this.handle('marketplace', 'installTheme', async (_e, id: string) => {
@@ -209,6 +275,11 @@ export class IpcRouter {
     this.handle('languages', 'complete', (e, req: CompletionRequest) => languageServers.complete(this.projectOf(e), req));
     this.handle('languages', 'hover', (e, req: CompletionRequest) => languageServers.hover(this.projectOf(e), req));
     this.handle('languages', 'definition', (e, req: CompletionRequest) => languageServers.definition(this.projectOf(e), req));
+    this.handle('languages', 'symbols', (e, req: DocumentRequest) => languageServers.symbols(this.projectOf(e), req));
+    this.handle('languages', 'references', (e, req: CompletionRequest) => languageServers.references(this.projectOf(e), req));
+    this.handle('languages', 'rename', (e, req: CompletionRequest & { newName: string }) => languageServers.rename(this.projectOf(e), req));
+    this.handle('languages', 'format', (e, req: DocumentRequest & { tabSize: number; insertSpaces: boolean }) => languageServers.format(this.projectOf(e), req));
+    this.handle('languages', 'signatureHelp', (e, req: CompletionRequest) => languageServers.signatureHelp(this.projectOf(e), req));
     this.handle('languages', 'syncDocument', async (e, req: { path: string; languageId: string; text: string }) => {
       await languageServers.sync(this.projectOf(e), req);
     });
@@ -256,6 +327,7 @@ export class IpcRouter {
     const { windows } = this.services;
     this.on('windows', 'openSettings', (e, section?: string) => windows.openSettings(this.senderWindow(e), section));
     this.on('windows', 'openNewProject', (e) => windows.openNewProject(this.senderWindow(e)));
+    this.on('windows', 'openWelcome', () => windows.openWelcome());
     this.on('window', 'close', (e) => this.senderWindow(e).close());
     this.on('window', 'setDirty', (e, dirty: boolean) => windows.setDirty(this.senderWindow(e), dirty));
   }

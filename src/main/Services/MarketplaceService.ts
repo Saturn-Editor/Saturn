@@ -3,7 +3,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { unzipSync } from 'fflate';
-import { parseMarketplaceIndex, type MarketplaceIndex } from '@shared/marketplace';
+import {
+  chooseVersion, compareVersions, parseMarketplaceIndex, parseMarketplaceList, type MarketplaceEntry, type MarketplaceKind,
+} from '@shared/marketplace';
 import type { ThemeSummary } from '@shared/types';
 import { MANIFEST_FILES, type ModuleKind } from '@shared/modules';
 import type { CodeModuleService } from './CodeModuleService';
@@ -13,12 +15,22 @@ import type { ThemeService } from './ThemeService';
 const INDEX_TIMEOUT_MS = 5000;
 const DOWNLOAD_TIMEOUT_MS = 60_000;
 
+/** A newer version of something installed that this Saturn can install. */
+export interface AvailableUpdate {
+  kind: MarketplaceKind;
+  id: string;
+  name: string;
+  from: string;
+  to: string;
+}
+
 /**
  * Fetches the GitHub-hosted index and installs entries from it: download the release zip, check its
  * SHA-256, unzip it to a temp folder, then hand that folder to the normal module or theme install.
  */
 export class MarketplaceService {
-  private index: MarketplaceIndex | null = null;
+  /** Lists last fetched per kind; installs use these, so an entry can't change under the Marketplace window. */
+  private readonly lists = new Map<MarketplaceKind, MarketplaceEntry[]>();
 
   constructor(
     private readonly modules: CodeModuleService,
@@ -27,46 +39,88 @@ export class MarketplaceService {
     private readonly indexUrl: () => Promise<string>,
   ) {}
 
-  async fetchIndex(): Promise<MarketplaceIndex> {
-    const res = await fetch(await this.indexUrl(), { signal: AbortSignal.timeout(INDEX_TIMEOUT_MS), cache: 'no-store' });
-    if (!res.ok) throw new Error(`The marketplace returned ${res.status}`);
-    this.index = parseMarketplaceIndex(await res.json());
-    return this.index;
+  /** Fetches index.json, then the one kind's list it points to (relative to index.json). */
+  async fetchList(kind: MarketplaceKind): Promise<MarketplaceEntry[]> {
+    const indexUrl = await this.indexUrl();
+    const index = parseMarketplaceIndex(await this.getJson(indexUrl));
+    const list = parseMarketplaceList(kind, await this.getJson(new URL(index[kind], indexUrl).href));
+    this.lists.set(kind, list);
+    return list;
   }
 
-  /** Installs a language or extension from the index (its zip holds saturn-language.json or saturn-extension.json). */
+  /** Installs a language or extension: the newest release compatible with this Saturn. */
   async installModule(kind: ModuleKind, id: string): Promise<void> {
-    const index = await this.currentIndex();
-    const entry = (kind === 'language' ? index.languages : index.extensions).find((l) => l.id === id);
-    if (!entry) throw new Error(`${id} isn't in the marketplace`);
+    const entry = await this.entry(kind === 'language' ? 'languages' : 'extensions', id);
+    const release = chooseVersion(entry).installable;
+    if (!release) throw new Error(`Every version of ${entry.name} needs a newer Saturn; update Saturn to install it`);
     const file = MANIFEST_FILES[kind];
-    await this.withDownload(entry.download, entry.sha256, async (dir) => {
+    await this.withDownload(release.download, release.sha256, async (dir) => {
       const manifest = await readJson(join(dir, file), `The download has no ${file}`) as { id?: string; version?: string };
-      if (manifest.id !== entry.id || manifest.version !== entry.version) {
-        throw new Error(`The download doesn't match ${entry.name} ${entry.version} in the marketplace`);
+      if (manifest.id !== entry.id || manifest.version !== release.version) {
+        throw new Error(`The download doesn't match ${entry.name} ${release.version} in the marketplace`);
       }
       await this.modules.install(kind, dir);
     });
   }
 
   async installTheme(id: string): Promise<ThemeSummary> {
-    const entry = (await this.currentIndex()).themes.find((t) => t.id === id);
-    if (!entry) throw new Error(`${id} isn't in the marketplace`);
-    return this.withDownload(entry.download, entry.sha256, async (dir) => {
+    const entry = await this.entry('themes', id);
+    const release = entry.versions[0];
+    return this.withDownload(release.download, release.sha256, async (dir) => {
       const theme = await readJson(join(dir, 'theme.json'), 'The download has no theme.json') as { id?: string; version?: string };
-      if (theme.id !== entry.id || theme.version !== entry.version) throw new Error(`The download doesn't match ${entry.name} ${entry.version} in the marketplace`);
+      if (theme.id !== entry.id || theme.version !== release.version) throw new Error(`The download doesn't match ${entry.name} ${release.version} in the marketplace`);
       return this.themes.install(dir);
     });
   }
 
-  /** Drops the cached index, e.g. after the marketplace URL changes. */
-  forgetIndex(): void {
-    this.index = null;
+  /** Installed languages, extensions and themes with a newer compatible version in the marketplace. */
+  async availableUpdates(): Promise<AvailableUpdate[]> {
+    const installed: Record<MarketplaceKind, { id: string; version: string | null }[]> = {
+      languages: await this.modules.summaries('language'),
+      extensions: await this.modules.summaries('extension'),
+      themes: (await this.themes.list()).filter((t) => !t.builtIn),
+    };
+    const found: AvailableUpdate[] = [];
+    for (const kind of Object.keys(installed) as MarketplaceKind[]) {
+      if (!installed[kind].length) continue;
+      const list = await this.fetchList(kind);
+      for (const item of installed[kind]) {
+        const entry = list.find((e) => e.id === item.id);
+        const best = entry && chooseVersion(entry).installable;
+        if (best && item.version && compareVersions(best.version, item.version) > 0) {
+          found.push({ kind, id: item.id, name: entry.name, from: item.version, to: best.version });
+        }
+      }
+    }
+    return found;
   }
 
-  /** Installs use the index the Marketplace window last showed, so the entry can't change underneath it. */
-  private async currentIndex(): Promise<MarketplaceIndex> {
-    return this.index ?? this.fetchIndex();
+  /** Installs the given updates; one failing doesn't stop the rest. Rejects listing what failed. */
+  async installUpdates(updates: AvailableUpdate[]): Promise<void> {
+    const failed: string[] = [];
+    for (const u of updates) {
+      await (u.kind === 'themes' ? this.installTheme(u.id) : this.installModule(u.kind === 'languages' ? 'language' : 'extension', u.id))
+        .catch(() => failed.push(u.name));
+    }
+    if (failed.length) throw new Error(`Couldn't update ${failed.join(', ')}`);
+  }
+
+  /** Drops the cached lists, e.g. after the marketplace URL changes. */
+  forgetIndex(): void {
+    this.lists.clear();
+  }
+
+  private async entry(kind: MarketplaceKind, id: string): Promise<MarketplaceEntry> {
+    const list = this.lists.get(kind) ?? await this.fetchList(kind);
+    const entry = list.find((e) => e.id === id);
+    if (!entry) throw new Error(`${id} isn't in the marketplace`);
+    return entry;
+  }
+
+  private async getJson(url: string): Promise<unknown> {
+    const res = await fetch(url, { signal: AbortSignal.timeout(INDEX_TIMEOUT_MS), cache: 'no-store' });
+    if (!res.ok) throw new Error(`The marketplace returned ${res.status}`);
+    return res.json();
   }
 
   private async withDownload<T>(url: string, sha256: string, use: (dir: string) => Promise<T>): Promise<T> {

@@ -1,6 +1,6 @@
 import { effect, signal } from '@preact/signals';
 import type { Extension } from '@codemirror/state';
-import type { ContributionSnapshot, ModuleLook } from '@shared/modules';
+import type { ContributionSnapshot, LanguageFeature, ModuleLook } from '@shared/modules';
 import type { AppSettings } from '@shared/types';
 import { ModuleIcon, QuestionIcon } from '@renderer/components';
 import { editorBehaviour } from '@renderer/editor/codemirrorSetup';
@@ -9,7 +9,7 @@ import type { EditorWorkspace } from '@renderer/screens/editor/EditorWorkspace';
 import { languageServerFeatures, receiveDiagnostics, setShowDiagnostics } from './languageServer';
 import { clearGrammars, loadGrammar, textMateHighlighting } from './textmate';
 
-export const EMPTY_SNAPSHOT: ContributionSnapshot = { languages: [], panels: [], commands: [], previews: [], fileTemplates: [], newProject: [], settings: [], buttons: [] };
+export const EMPTY_SNAPSHOT: ContributionSnapshot = { languages: [], panels: [], commands: [], previews: [], fileTemplates: [], newProject: [], settings: [], buttons: [], debuggers: [] };
 
 export type LanguageInfo = ContributionSnapshot['languages'][number];
 
@@ -47,11 +47,13 @@ export class ModuleBridge {
     const api = window.saturn.modules;
     // Completion and Behaviour settings shape each editor, so a change rebuilds the open ones.
     const read = (s: AppSettings) => {
-      const next = { completion: s.completion, autoIndent: s.autoIndent, indentWith: s.indentWith, indentSize: s.indentSize };
-      const changed = next.completion !== this.completion || next.autoIndent !== editorBehaviour.autoIndent ||
-        next.indentWith !== editorBehaviour.indentWith || next.indentSize !== editorBehaviour.indentSize;
-      this.completion = next.completion;
-      Object.assign(editorBehaviour, { autoIndent: next.autoIndent, indentWith: next.indentWith, indentSize: next.indentSize });
+      this.ws.formatOnSave = s.formatOnSave;
+      this.ws.defaultViews.value = s.defaultViews;
+      const behaviour = { autoIndent: s.autoIndent, indentWith: s.indentWith, indentSize: s.indentSize, autoCloseBrackets: s.autoCloseBrackets };
+      const changed = s.completion !== this.completion ||
+        (Object.keys(behaviour) as (keyof typeof behaviour)[]).some((k) => behaviour[k] !== editorBehaviour[k]);
+      this.completion = s.completion;
+      Object.assign(editorBehaviour, behaviour);
       return changed;
     };
     const initial = await window.saturn.settings.get();
@@ -99,7 +101,21 @@ export class ModuleBridge {
     }
     if (language.hasServer) {
       const openLocation = (loc: { path: string; line: number; column: number }) => void this.ws.documents.open(loc.path, { line: loc.line, column: loc.column });
-      extensions.push(languageServerFeatures({ path, languageId: language.id, openLocation }, { completion: this.completion }));
+      // Each feature needs the server to support it, the language's own switch, and (for completion) SmartCode's.
+      const has = (f: LanguageFeature) => language.features.includes(f);
+      extensions.push(languageServerFeatures(
+        {
+          path,
+          languageId: language.id,
+          openLocation,
+          diagnostics: has('diagnostics'),
+          commands: { references: has('references'), rename: has('rename'), formatting: has('formatting') },
+          showReferences: (symbol, list) => this.ws.showReferences(symbol, list),
+          applyEdits: (files) => this.ws.applyEdits(files),
+          notify: (text, kind = 'info') => (this.ws.notice.value = { text, kind }),
+        },
+        { completion: this.completion && has('completion'), hover: has('hover'), definition: has('definition'), signatureHelp: has('signatureHelp') },
+      ));
     }
     return extensions;
   }
@@ -149,6 +165,7 @@ export class ModuleBridge {
         label: p.label,
         extensions: p.extensions,
         source: p.moduleId,
+        defaultView: p.defaultView,
         render: (text, ctx) => api.renderPreview(p.id, text, ctx.path),
       }));
     }

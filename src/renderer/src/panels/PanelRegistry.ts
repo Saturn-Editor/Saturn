@@ -12,6 +12,8 @@ export interface PanelDefinition {
   icon: ComponentChild;
   defaultDock: DockId;
   render: (ctx: PanelContext) => ComponentChild;
+  /** Buttons at the right of the panel's title bar (e.g. the Project panel's Expand all). */
+  actions?: () => ComponentChild;
   /** 'core' for built-in panels, otherwise the module id that added it (Plan 3). */
   source: 'core' | string;
 }

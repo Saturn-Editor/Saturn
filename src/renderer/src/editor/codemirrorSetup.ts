@@ -1,26 +1,39 @@
 import {
   copyLineDown, defaultKeymap, deleteLine, history, historyKeymap, indentWithTab, insertNewline, moveLineDown, moveLineUp,
 } from '@codemirror/commands';
+import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { bracketMatching, indentUnit } from '@codemirror/language';
 import { gotoLine, highlightSelectionMatches, openSearchPanel, search, searchKeymap } from '@codemirror/search';
-import { Compartment, EditorState, Prec } from '@codemirror/state';
+import { Compartment, EditorState, Prec, type Extension } from '@codemirror/state';
 import {
   drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, type Command,
 } from '@codemirror/view';
 import { actionForKey } from '@renderer/commands/keymap';
-import { goToDefinition } from '@renderer/modules/languageServer';
+import { toggleBreakpoint } from './breakpoints';
+import { conflictMarkers } from './conflicts';
+import { findReferences, formatDocument, goToDefinition, renameSymbol } from '@renderer/modules/languageServer';
 
 /** Plan 3 puts language support (highlighting, completion) in here; the core leaves it empty. */
 export const languageCompartment = new Compartment();
 
 /** Settings → Behaviour. New editor states read it; ModuleBridge rebuilds open editors when it changes. */
-export const editorBehaviour = { autoIndent: true, indentWith: 'spaces' as 'spaces' | 'tab', indentSize: 4 };
+export const editorBehaviour = { autoIndent: true, indentWith: 'spaces' as 'spaces' | 'tab', indentSize: 4, autoCloseBrackets: true };
+
+/** Brackets and quotes that close themselves (user's choice includes <). */
+const CLOSING_PAIRS = ['(', '[', '{', '<', "'", '"'];
 
 function behaviourExtensions() {
-  const { autoIndent, indentWith, indentSize } = editorBehaviour;
+  const { autoIndent, indentWith, indentSize, autoCloseBrackets } = editorBehaviour;
   return [
     indentUnit.of(indentWith === 'tab' ? '\t' : ' '.repeat(indentSize)),
     EditorState.tabSize.of(indentSize),
+    // Typing an opener adds its closer; Enter between a pair puts the closer on its own line, indented
+    // (CodeMirror's Enter does that when auto-indent is on).
+    ...(autoCloseBrackets ? [
+      closeBrackets(),
+      EditorState.languageData.of(() => [{ closeBrackets: { brackets: CLOSING_PAIRS } }]),
+      keymap.of(closeBracketsKeymap),
+    ] : []),
     // Without auto-indent, Enter starts the new line at the left edge.
     ...(autoIndent ? [] : [Prec.high(keymap.of([{ key: 'Enter', run: insertNewline }]))]),
   ];
@@ -52,6 +65,20 @@ const saturnTheme = EditorView.theme({
   '.cm-completionInfo': { backgroundColor: 'var(--saturn-raised)', border: '1px solid var(--saturn-border)' },
   // Language-server hover text and diagnostics popups.
   '.cm-saturn-hover': { padding: '4px 8px', maxWidth: '560px', maxHeight: '320px', overflow: 'auto', whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)' },
+  '.cm-saturn-parameter': { color: 'var(--saturn-accent)' },
+  '.cm-saturn-signature-doc': { marginTop: '4px', color: 'var(--saturn-muted)', whiteSpace: 'pre-wrap' },
+  '.cm-saturn-rename': { display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px' },
+  '.cm-saturn-rename input': { width: '240px', padding: '2px 6px', outline: 'none' },
+  '.cm-saturn-breakpoints .cm-gutterElement': { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '14px', cursor: 'pointer' },
+  '.cm-saturn-breakpoint': { width: '9px', height: '9px', borderRadius: '50%', backgroundColor: 'var(--color-red-500)' },
+  '.cm-lineNumbers .cm-gutterElement': { cursor: 'pointer' },
+  '.cm-saturn-execution': { backgroundColor: 'color-mix(in srgb, var(--saturn-accent) 22%, transparent)' },
+  '.cm-saturn-conflict-ours': { backgroundColor: 'color-mix(in srgb, var(--color-green-500) 14%, transparent)' },
+  '.cm-saturn-conflict-theirs': { backgroundColor: 'color-mix(in srgb, var(--color-sky-500) 14%, transparent)' },
+  '.cm-saturn-conflict-marker': { color: 'var(--saturn-muted)' },
+  '.cm-saturn-conflict-actions': { display: 'flex', gap: '12px', padding: '2px 4px', fontFamily: 'inherit' },
+  '.cm-saturn-conflict-actions button': { color: 'var(--saturn-muted)', background: 'none', border: 'none', padding: '0', cursor: 'pointer' },
+  '.cm-saturn-conflict-actions button:hover': { color: 'var(--saturn-accent)' },
   '.cm-diagnostic': { padding: '4px 8px', borderLeftWidth: '3px' },
   '.cm-diagnostic-error': { borderLeftColor: 'var(--color-red-500)' },
   '.cm-diagnostic-warning': { borderLeftColor: 'var(--saturn-accent)' },
@@ -68,11 +95,23 @@ const EDITOR_COMMANDS: Record<string, Command> = {
   'editor.replace': openSearchPanel,
   'editor.gotoLine': gotoLine,
   'editor.gotoDefinition': (view) => goToDefinition(view),
+  'editor.findReferences': (view) => findReferences(view),
+  'editor.rename': (view) => renameSymbol(view),
+  'editor.formatDocument': (view) => {
+    void formatDocument(view);
+    return true;
+  },
+  'editor.toggleBreakpoint': (view) => toggleBreakpoint(view),
   'editor.duplicateLine': copyLineDown,
   'editor.deleteLine': deleteLine,
   'editor.moveLineUp': moveLineUp,
   'editor.moveLineDown': moveLineDown,
 };
+
+/** Runs an editor command (as in the keymap) on a view, e.g. from the right-click menu. */
+export function runEditorCommand(id: string, view: EditorView): void {
+  EDITOR_COMMANDS[id]?.(view);
+}
 
 /**
  * The chosen keymap's editor shortcuts (Settings → Keymap). It looks the keymap up on every key press,
@@ -89,12 +128,14 @@ const keymapShortcuts = Prec.high(EditorView.domEventHandlers({
   },
 }));
 
-/** Builds the state for one plain-text document. */
-export function createEditorState(text: string, callbacks: EditorCallbacks): EditorState {
+/** Builds the state for one plain-text document; `before` goes ahead of the line numbers (the breakpoint column). */
+export function createEditorState(text: string, callbacks: EditorCallbacks, before: Extension = []): EditorState {
   return EditorState.create({
     doc: text,
     extensions: [
-      lineNumbers(),
+      before,
+      // Clicking a line number adds or removes a breakpoint there.
+      lineNumbers({ domEventHandlers: { mousedown: (view, line) => toggleBreakpoint(view, line.from) } }),
       highlightActiveLineGutter(),
       highlightActiveLine(),
       drawSelection(),
@@ -103,6 +144,7 @@ export function createEditorState(text: string, callbacks: EditorCallbacks): Edi
       search({ top: false }),
       highlightSelectionMatches(),
       languageCompartment.of([]),
+      conflictMarkers,
       keymapShortcuts,
       behaviourExtensions(),
       keymap.of([

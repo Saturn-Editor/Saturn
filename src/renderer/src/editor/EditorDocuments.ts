@@ -12,12 +12,17 @@ export interface OpenDoc {
 
 export type OpenResult = 'opened' | 'binary' | 'too-large';
 
-/** A file that couldn't be shown as text, displayed as an info tab instead. */
+/** A tab that isn't an editable file: a file that can't be shown as text, or a Git diff. */
 export interface InfoDoc {
+  /** The tab's id: the file's path, or "diff:…" for a diff. */
   path: string;
   name: string;
-  reason: 'binary' | 'too-large';
+  reason: 'binary' | 'too-large' | 'diff';
   bytes?: number;
+  /** For a commit's diff: the unified diff text. */
+  diff?: string;
+  /** For uncommitted changes: the project-relative file, whose diff stays current. */
+  workingPath?: string;
 }
 
 const TYPING_SAVE_MS = 2000;
@@ -38,10 +43,44 @@ export class EditorDocuments {
   readonly infos = signal<InfoDoc[]>([]);
   readonly activePath = signal<string | null>(null);
   readonly active = computed(() => this.docs.value.find((d) => d.path === this.activePath.value) ?? null);
+  /**
+   * Split editor: a second editor beside the first. `activePath` is always the focused side's file;
+   * `otherPath` is the other side's. Both sides share the open tabs.
+   */
+  readonly split = signal(false);
+  readonly focused = signal<0 | 1>(0);
+  readonly otherPath = signal<string | null>(null);
   /** A line and optional column (both 1-based) the editor should jump to once that file is showing. */
   readonly reveal = signal<{ path: string; line: number; column?: number } | null>(null);
 
   constructor(private readonly api: Pick<SaturnApi, 'fs' | 'window'>) {}
+
+  /** The file one side of the editor shows (0 is the left, or the only, editor). */
+  pathFor(group: 0 | 1): string | null {
+    return group === this.focused.value ? this.activePath.value : this.otherPath.value;
+  }
+
+  /** Moves focus to one side of the split; `activePath` becomes that side's file. */
+  focus(group: 0 | 1): void {
+    if (group === this.focused.value || !this.split.value) return;
+    const was = this.activePath.value;
+    this.activePath.value = this.otherPath.value;
+    this.otherPath.value = was;
+    this.focused.value = group;
+  }
+
+  /** Split Right opens the current file in a second editor; closing the split keeps the focused side's file. */
+  toggleSplit(): void {
+    if (this.split.value) {
+      this.split.value = false;
+      this.focused.value = 0;
+      this.otherPath.value = null;
+      return;
+    }
+    this.otherPath.value = this.activePath.value;
+    this.split.value = true;
+    this.focus(1);
+  }
 
   /** Settings → Editor → Behaviour → Auto-save. */
   autoSave: 'typing' | 'idle' | 'off' = 'idle';
@@ -97,6 +136,14 @@ export class EditorDocuments {
     return 'opened';
   }
 
+  /** Opens (or refreshes and switches to) a read-only diff tab: a commit's `diff` text, or a file's live `workingPath` changes. */
+  openDiff(id: string, name: string, source: { diff: string } | { workingPath: string }): void {
+    const tab: InfoDoc = { path: `diff:${id}`, name, reason: 'diff', ...source };
+    const existing = this.infos.value.some((i) => i.path === tab.path);
+    this.infos.value = existing ? this.infos.value.map((i) => (i.path === tab.path ? tab : i)) : [...this.infos.value, tab];
+    this.activePath.value = tab.path;
+  }
+
   close(path: string): void {
     clearTimeout(this.saveTimers.get(path));
     this.saveTimers.delete(path);
@@ -109,10 +156,10 @@ export class EditorDocuments {
     const index = order.indexOf(path);
     this.docs.value = this.docs.value.filter((d) => d.path !== path);
     this.infos.value = this.infos.value.filter((i) => i.path !== path);
-    if (this.activePath.value === path) {
-      const remaining = this.tabOrder();
-      this.activePath.value = remaining[Math.max(0, index - 1)] ?? null;
-    }
+    const remaining = this.tabOrder();
+    const next = remaining[Math.max(0, index - 1)] ?? null;
+    if (this.activePath.value === path) this.activePath.value = next;
+    if (this.otherPath.value === path) this.otherPath.value = next;
     this.reportDirty();
   }
 
@@ -127,6 +174,7 @@ export class EditorDocuments {
     this.docs.value = this.docs.value.map((d) => (isUnder(d.path, from) ? { ...d, path: move(d.path), name: baseName(move(d.path)) } : d));
     this.infos.value = this.infos.value.map((i) => (isUnder(i.path, from) ? { ...i, path: move(i.path), name: baseName(move(i.path)) } : i));
     if (this.activePath.value) this.activePath.value = move(this.activePath.value);
+    if (this.otherPath.value) this.otherPath.value = move(this.otherPath.value);
   }
 
   setText(path: string, text: string): void {
