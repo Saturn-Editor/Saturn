@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { GitRemote, GitTag } from '@shared/types';
 import { Button, ChevronDownIcon, Checkbox, ContextMenu, GitIcon, Select, TextInput, type MenuEntry } from '@renderer/components';
 import { errorText, useGitStatus } from '@renderer/panels/builtin/gitState';
+import { useWorkspace } from './EditorWorkspace';
 
 const NEW_BRANCH = '\0new';
 const MERGE = '\0merge';
@@ -106,6 +107,7 @@ function RemotesForm({ onClose }: { onClose: () => void }) {
  * and manages remotes. Hidden outside a repository.
  */
 export function BranchMenu() {
+  const ws = useWorkspace();
   const [status] = useGitStatus();
   const [branches, setBranches] = useState<string[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -143,7 +145,7 @@ export function BranchMenu() {
       setName(status.branch ?? '');
       return setForm('rename');
     }
-    if (id !== status.branch) void window.saturn.git.checkout(id).catch((e) => setProblem(errorText(e)));
+    if (id !== status.branch) void ws.switchBranch(id).catch((e) => setProblem(errorText(e)));
   };
 
   const done = (task: Promise<void>) => void task.then(() => setForm(null), (e) => setProblem(errorText(e)));

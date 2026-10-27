@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { GitStatus, GitTag } from '@shared/types';
 import { ChevronDownIcon, ChevronRightIcon, IconButton, PlusIcon, TextInput } from '@renderer/components';
+import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
 import { errorText } from './gitState';
 
 type Kind = 'branch' | 'remote' | 'tag';
@@ -21,6 +22,7 @@ interface GitRefsProps {
  * too: Saturn switches to main first, bringing pending changes), and tags renamed and deleted.
  */
 export function GitRefs({ status, selected, onSelect }: GitRefsProps) {
+  const ws = useWorkspace();
   const [branches, setBranches] = useState<string[]>([]);
   const [remotes, setRemotes] = useState<string[]>([]);
   const [tags, setTags] = useState<GitTag[]>([]);
@@ -163,7 +165,7 @@ export function GitRefs({ status, selected, onSelect }: GitRefsProps) {
         title={kind === 'branch' && !current ? `${ref} (double-click to check out)` : ref}
         data-testid={`git-ref-${kind}`}
         onClick={() => onSelect(current ? null : ref)}
-        onDblClick={() => kind === 'branch' && !current && run(window.saturn.git.checkout(ref), () => onSelect(null))}
+        onDblClick={() => kind === 'branch' && !current && run(ws.switchBranch(ref).then(() => undefined), () => onSelect(null))}
       >
         <span class={`flex-1 truncate ${current ? 'font-semibold' : ''}`}>{label}</span>
         {detail && <span class="text-muted font-mono group-hover:hidden">{detail}</span>}

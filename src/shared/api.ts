@@ -15,11 +15,11 @@ export function channel(area: string, name: string): string {
   return `${CHANNEL_PREFIX}${area}.${name}`;
 }
 
-/** Listing, installing from a folder and removing one kind of code module. */
+/** Listing, installing from a folder or zip and removing one kind of code module. */
 interface InstallableModules {
   list(): Promise<ModuleSummary[]>;
-  /** Asks for a folder and installs what's in it; null if cancelled. */
-  installDialog(): Promise<ModuleSummary | null>;
+  /** Asks for a folder (the default) or a .zip file and installs what's in it; null if cancelled. */
+  installDialog(source?: 'folder' | 'zip'): Promise<ModuleSummary | null>;
   uninstall(id: string): Promise<void>;
 }
 
@@ -146,7 +146,8 @@ export interface SaturnApi {
     stage(paths: string[]): Promise<void>;
     unstage(paths: string[]): Promise<void>;
     commit(message: string): Promise<void>;
-    checkout(branch: string): Promise<void>;
+    /** Switches branch; uncommitted changes come along ("bring") or are shelved for the branch being left ("shelve", the default). */
+    checkout(branch: string, mode?: 'bring' | 'shelve'): Promise<void>;
     createBranch(name: string): Promise<void>;
     push(): Promise<void>;
     pull(): Promise<void>;
@@ -230,7 +231,10 @@ export interface SaturnApi {
     pickFile(): Promise<string | null>;
     /** Clones a repository into a new folder inside `parentDir`, then opens it. */
     clone(url: string, parentDir: string): Promise<void>;
+    /** Creates the folder, runs the language's onCreate (folder removed if it fails), then opens it. */
     create(req: NewProjectRequest): Promise<void>;
+    /** Progress messages from the language's onCreate while `create` runs. */
+    onCreateProgress(cb: (message: string) => void): Unsubscribe;
     defaultParentDir(): Promise<string>;
   };
   themes: {
@@ -244,8 +248,8 @@ export interface SaturnApi {
     /** Whether the mode follows the OS's light/dark setting. */
     syncWithOs(): Promise<boolean>;
     setSyncWithOs(on: boolean): Promise<void>;
-    /** Asks for a folder containing theme.json and installs it; null if cancelled. */
-    installDialog(): Promise<ThemeSummary | null>;
+    /** Asks for a folder (the default) or a .zip file containing theme.json and installs it; null if cancelled. */
+    installDialog(source?: 'folder' | 'zip'): Promise<ThemeSummary | null>;
     uninstall(id: string): Promise<void>;
     onChanged(cb: (t: Theme) => void): Unsubscribe;
     onListChanged(cb: () => void): Unsubscribe;

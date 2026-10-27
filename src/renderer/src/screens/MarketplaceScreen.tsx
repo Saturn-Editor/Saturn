@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { useRef, useState } from 'preact/hooks';
 import { chooseVersion, type MarketplaceEntry, type MarketplaceKind } from '@shared/marketplace';
 import type { ModuleKind } from '@shared/modules';
 import type { ThemeMode, ThemeSummary } from '@shared/types';
@@ -69,7 +69,7 @@ function InstalledModules({ kind, list, onError }: { kind: ModuleKind; list: Lis
     return (
       <div class="h-full flex flex-col items-center justify-center gap-1.5">
         <div class="text-strong">No {k.plural} installed yet</div>
-        <div class="text-muted">Install one from Available, or use Install from folder….</div>
+        <div class="text-muted">Install one from Available, or use Upload.</div>
       </div>
     );
   }
@@ -212,10 +212,13 @@ export function MarketplaceScreen({ embedded = false }: { embedded?: boolean }) 
     setError(null);
   };
 
-  const installFromFolder = async () => {
+  // Upload: a menu of Zip file… / Folder…, then the OS picker.
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const uploadAnchor = useRef<HTMLSpanElement>(null);
+  const upload = async (source: 'folder' | 'zip') => {
     setError(null);
     try {
-      const installed = kind ? await MODULE_KINDS[kind].api().installDialog() : await window.saturn.themes.installDialog();
+      const installed = kind ? await MODULE_KINDS[kind].api().installDialog(source) : await window.saturn.themes.installDialog(source);
       if (installed) setTab('installed');
     } catch (e) {
       setError(errorText(e));
@@ -239,7 +242,21 @@ export function MarketplaceScreen({ embedded = false }: { embedded?: boolean }) 
                 <Button testId="marketplace-refresh" disabled={list?.status === 'loading'} onClick={reloadList}>
                   {list?.status === 'loading' ? 'Refreshing…' : 'Refresh'}
                 </Button>
-                <Button testId="install-from-folder" onClick={() => void installFromFolder()}>Install from folder…</Button>
+                <span ref={uploadAnchor} class="relative">
+                  <Button testId="marketplace-upload" onClick={() => setUploadOpen(!uploadOpen)}>Upload</Button>
+                  {uploadOpen && (
+                    <ContextMenu
+                      class="top-8 right-0 w-44"
+                      anchor={uploadAnchor}
+                      items={[
+                        { id: 'zip', label: 'Zip file…', testId: 'upload-zip' },
+                        { id: 'folder', label: 'Folder…', testId: 'upload-folder' },
+                      ]}
+                      onPick={(id) => void upload(id as 'folder' | 'zip')}
+                      onClose={() => setUploadOpen(false)}
+                    />
+                  )}
+                </span>
               </>
             }
           />

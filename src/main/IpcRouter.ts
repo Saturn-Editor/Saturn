@@ -1,17 +1,17 @@
-import { mkdir, stat } from 'node:fs/promises';
+import { mkdir, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { channel } from '@shared/api';
 import type { MarketplaceKind } from '@shared/marketplace';
-import { SATURN_API_VERSION, type CompletionRequest, type DocumentRequest, type SettingValue, type TreeItem } from '@shared/modules';
+import { MANIFEST_FILES, SATURN_API_VERSION, type CompletionRequest, type DocumentRequest, type SettingValue, type TreeItem } from '@shared/modules';
 import type { AppFolder, AppInfo, AppSettings, LayoutState, NewProjectRequest, RunEntry, ThemeMode } from '@shared/types';
 import type { AppPaths } from './Helpers/AppPaths';
 import type { ExtensionHostService } from './Services/ExtensionHostService';
 import { FileService } from './Services/FileService';
 import { GitService } from './Services/GitService';
 import type { LanguageServerService } from './Services/LanguageServerService';
-import type { MarketplaceService } from './Services/MarketplaceService';
+import { withLocalZip, type MarketplaceService } from './Services/MarketplaceService';
 import type { NotificationService } from './Services/NotificationService';
 import type { UpdateService } from './Services/UpdateService';
 import type { DebugService } from './Services/DebugService';
@@ -139,7 +139,7 @@ export class IpcRouter {
     changing('stage', (git, paths: string[]) => git.stage(paths));
     changing('unstage', (git, paths: string[]) => git.unstage(paths));
     changing('commit', (git, message: string) => git.commit(message));
-    changing('checkout', (git, branch: string) => git.checkout(branch));
+    changing('checkout', (git, branch: string, mode?: 'bring' | 'shelve') => git.checkout(branch, mode));
     changing('createBranch', (git, name: string) => git.createBranch(name));
     // Pushing can take a while, so finishing posts a notification (which also pops up).
     const pushed = async (git: GitService, what: string) => {
@@ -266,6 +266,14 @@ export class IpcRouter {
     if (win) this.send(win.webContents, area, name, ...args);
   }
 
+  /** Marketplace → Upload: asks for a folder or a .zip file to install; null if cancelled. */
+  private async pickUpload(e: IpcMainInvokeEvent, source: 'folder' | 'zip', what: string): Promise<string | null> {
+    const result = await dialog.showOpenDialog(this.senderWindow(e), source === 'zip'
+      ? { title: `Install ${what} from a zip file`, properties: ['openFile'], filters: [{ name: 'Zip files', extensions: ['zip'] }] }
+      : { title: `Install ${what} from a folder`, properties: ['openDirectory'] });
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  }
+
   private registerModules(): void {
     const { modules, host, languageServers, windows } = this.services;
     const ctx = (e: IpcMainInvokeEvent) => ({ projectPath: this.projectOf(e) });
@@ -273,13 +281,11 @@ export class IpcRouter {
     // Installing, listing and removing, per kind: "languages" and "extensions".
     for (const [area, kind] of [['languages', 'language'], ['extensions', 'extension']] as const) {
       this.handle(area, 'list', () => modules.summaries(kind));
-      this.handle(area, 'installDialog', async (e) => {
-        const result = await dialog.showOpenDialog(this.senderWindow(e), {
-          title: `Install ${kind === 'language' ? 'a language' : 'an extension'} from a folder`,
-          properties: ['openDirectory'],
-        });
-        if (result.canceled || !result.filePaths[0]) return null;
-        const manifest = await modules.install(kind, result.filePaths[0]);
+      this.handle(area, 'installDialog', async (e, source: 'folder' | 'zip' = 'folder') => {
+        const picked = await this.pickUpload(e, source, kind === 'language' ? 'a language' : 'an extension');
+        if (!picked) return null;
+        const install = (dir: string) => modules.install(kind, dir);
+        const manifest = source === 'zip' ? await withLocalZip(picked, MANIFEST_FILES[kind], install) : await install(picked);
         return (await modules.summaries(kind)).find((m) => m.id === manifest.id) ?? null;
       });
       this.handle(area, 'uninstall', (_e, id: string) => modules.uninstall(kind, id));
@@ -385,7 +391,15 @@ export class IpcRouter {
       const path = await creator.create(req);
       if (req.languageId) {
         const owner = (await modules.snapshot()).newProject.find((n) => n.language === req.languageId);
-        if (owner) await host.createProject(owner.moduleId, { projectPath: path, fields: req.fields });
+        if (owner) {
+          try {
+            await host.createProject(owner.moduleId, { projectPath: path, fields: req.fields }, (message) => this.send(e.sender, 'projects', 'createProgress', message));
+          } catch (err) {
+            // A half-made project isn't kept: the folder was new, so it goes, and the page shows why.
+            await rm(path, { recursive: true, force: true }).catch(() => undefined);
+            throw err;
+          }
+        }
       }
       await openProject(path, req.languageId);
       sender.close();
@@ -417,13 +431,10 @@ export class IpcRouter {
     this.handle('themes', 'setMode', async (_e, mode: ThemeMode) => {
       this.broadcast('themes', 'changed', await themes.setMode(mode));
     });
-    this.handle('themes', 'installDialog', async (e) => {
-      const result = await dialog.showOpenDialog(this.senderWindow(e), {
-        title: 'Install a theme from a folder',
-        properties: ['openDirectory'],
-      });
-      if (result.canceled || !result.filePaths[0]) return null;
-      const installed = await themes.install(result.filePaths[0]);
+    this.handle('themes', 'installDialog', async (e, source: 'folder' | 'zip' = 'folder') => {
+      const picked = await this.pickUpload(e, source, 'a theme');
+      if (!picked) return null;
+      const installed = source === 'zip' ? await withLocalZip(picked, 'theme.json', (dir) => themes.install(dir)) : await themes.install(picked);
       this.broadcast('themes', 'listChanged');
       return installed;
     });

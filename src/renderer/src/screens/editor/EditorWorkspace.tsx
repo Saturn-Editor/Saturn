@@ -40,6 +40,8 @@ export class EditorWorkspace {
   /** A message in the status bar (from a module, or a problem); click to dismiss. */
   readonly notice = signal<{ text: string; kind: MessageKind } | null>(null);
   readonly modules = new ModuleBridge(this);
+  /** A branch switch waiting for the user to choose what happens to uncommitted changes (see BranchSwitchPrompt). */
+  readonly branchSwitchPrompt = signal<{ branch: string; resolve: (mode: 'bring' | 'shelve' | null) => void } | null>(null);
   /** Requests from the Project panel's title-bar buttons; the panel acts on each new one. */
   readonly projectTreeRequest = signal<{ action: 'expandAll' | 'collapseAll' | 'refresh'; at: number } | null>(null);
   /** The last Find Usages results, shown in the Usages panel. */
@@ -96,6 +98,8 @@ export class EditorWorkspace {
     this.layout.state.subscribe(() => this.scheduleSave());
     this.panels.changed.subscribe(() => this.layout.sync());
     window.addEventListener('resize', () => this.layout.clampTo({ width: window.innerWidth, height: window.innerHeight }));
+    // Branch switches, pulls, stashes…: editors without unsaved changes show the files' new contents.
+    this.api.git.onChanged(() => void this.documents.reloadClean());
     this.api.window.onSaveAll(async () => {
       await this.documents.saveAll();
       this.api.window.close();
@@ -105,6 +109,26 @@ export class EditorWorkspace {
   /** Shows the terminal panel wherever it's docked. */
   showTerminal(): void {
     this.layout.show('terminal');
+  }
+
+  /**
+   * Switches branch. Open files are saved first so nothing is left behind; then, if there are
+   * uncommitted changes, they come along or are shelved, per Settings → Advanced → Git (asking unless
+   * the user chose to remember). Resolves false if cancelled.
+   */
+  async switchBranch(branch: string): Promise<boolean> {
+    await this.documents.saveAll();
+    const [status, settings] = await Promise.all([this.api.git.status(), this.api.settings.get()]);
+    let mode: 'bring' | 'shelve' = settings.branchSwitch === 'shelve' ? 'shelve' : 'bring';
+    if (status.changes.length && settings.branchSwitch === 'ask') {
+      const chosen = await new Promise<'bring' | 'shelve' | null>((resolve) => (this.branchSwitchPrompt.value = { branch, resolve }));
+      this.branchSwitchPrompt.value = null;
+      if (!chosen) return false;
+      mode = chosen;
+    }
+    await this.api.git.checkout(branch, mode);
+    await this.documents.reloadClean();
+    return true;
   }
 
   /** Debugs the open file with its language's debugger; continues instead if the program is paused. */

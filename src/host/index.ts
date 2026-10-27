@@ -47,7 +47,13 @@ export interface SaturnModuleApi {
     }): void;
   };
   projects: {
-    onCreate(handler: (ctx: ModuleContext & { fields: Record<string, string | boolean> }) => void | Promise<void>): void;
+    /**
+     * Fills in a new project's folder (`ctx.projectPath`, already created). May be async: Saturn shows
+     * "Creating…" until it settles, and `ctx.progress("Restoring packages…")` updates that text. Throwing
+     * (or rejecting) shows the message on the New Project page and removes the folder. `fields` holds
+     * the fields that apply, plus `tab` and `template` when the language has template tabs.
+     */
+    onCreate(handler: (ctx: ModuleContext & { fields: Record<string, string | boolean>; progress(message: string): void }) => void | Promise<void>): void;
     /** A project's editor window closed; release anything held for it (watchers, caches). */
     onDidClose(listener: (ctx: ModuleContext) => void): void;
     /** A project opened in an editor window. Also fires, just after activate(), for projects already open. */
@@ -130,8 +136,10 @@ class ExtensionHost {
       const t = this.templates.get(id);
       return { fileName: t?.fileName?.(ctx) ?? null, content: (await t?.content?.(ctx)) ?? '' };
     });
-    this.rpc.handle('createProject', (moduleId: string, ctx: ModuleContext & { fields: Record<string, string | boolean> }) =>
-      this.projectHandlers.get(moduleId)?.(ctx));
+    this.rpc.handle('createProject', (moduleId: string, ctx: ModuleContext & { fields: Record<string, string | boolean>; createId: string }) => {
+      const { createId, ...rest } = ctx;
+      return this.projectHandlers.get(moduleId)?.({ ...rest, progress: (message: string) => this.rpc.notify('createProgress', createId, String(message)) });
+    });
     this.rpc.handle('runEntries', async (ctx: ModuleContext) => {
       const all: { moduleId: string; name: string; command: string }[] = [];
       for (const [moduleId, provide] of this.runProviders) {

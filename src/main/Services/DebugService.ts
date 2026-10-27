@@ -27,7 +27,12 @@ class DapConnection {
   private buffer = Buffer.alloc(0);
   private readonly pending = new Map<number, { resolve: (body: any) => void; reject: (e: Error) => void }>();
 
-  constructor(private readonly child: ChildProcess, private readonly onEvent: (event: string, body: any) => void) {
+  constructor(
+    private readonly child: ChildProcess,
+    private readonly onEvent: (event: string, body: any) => void,
+    /** Requests the adapter makes of Saturn (runInTerminal); resolves to the response body, or rejects to refuse. */
+    private readonly onRequest: (command: string, args: any) => Promise<unknown> = () => Promise.reject(new Error('Not supported by Saturn')),
+  ) {
     child.stdout!.on('data', (chunk: Buffer) => {
       this.buffer = Buffer.concat([this.buffer, chunk]);
       this.drain();
@@ -77,8 +82,9 @@ class DapConnection {
     } else if (message.type === 'event') {
       this.onEvent(message.event!, message.body ?? {});
     } else {
-      // Requests from the adapter (e.g. runInTerminal) aren't supported; say so rather than leave them hanging.
-      this.send({ seq: this.seq++, type: 'response', request_seq: message.seq, command: message.command, success: false, message: 'Not supported by Saturn' });
+      const reply = (success: boolean, body?: unknown, error?: string) =>
+        this.send({ seq: this.seq++, type: 'response', request_seq: message.seq, command: message.command, success, body, message: error });
+      this.onRequest(message.command!, message.arguments).then((body) => reply(true, body ?? {}), (e: Error) => reply(false, undefined, e.message));
     }
   }
 }
@@ -97,6 +103,26 @@ export interface DebugEvents {
   /** Program and debugger output for the Debug panel's console. */
   output(projectPath: string, text: string, category: string): void;
   message(projectPath: string, text: string, kind: MessageKind): void;
+  /** Runs the program being debugged in a Terminal tab, so the user can type into it (Console.ReadLine, input()…). */
+  runInTerminal(projectPath: string, title: string, command: string): void;
+}
+
+/** Quotes one argument for the user's shell. */
+function shellQuote(arg: string): string {
+  if (process.platform === 'win32') return /[\s"]/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg;
+  return /^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`;
+}
+
+/** The command line for a DAP runInTerminal request: cd, environment, then the program and its arguments. */
+function terminalCommand(args: { cwd?: string; args: string[]; env?: Record<string, string | null> }): string {
+  const env = Object.entries(args.env ?? {}).filter(([, v]) => v !== null) as [string, string][];
+  const program = args.args.map(shellQuote).join(' ');
+  if (process.platform === 'win32') {
+    const sets = env.map(([k, v]) => `set "${k}=${v}" && `).join('');
+    return `${args.cwd ? `cd /d ${shellQuote(args.cwd)} && ` : ''}${sets}${program}`;
+  }
+  const assigns = env.map(([k, v]) => `${k}=${shellQuote(v)} `).join('');
+  return `${args.cwd ? `cd ${shellQuote(args.cwd)} && ` : ''}${assigns}${program}`;
 }
 
 const IDLE: DebugState = { state: 'idle', frames: [], scopes: [] };
@@ -149,7 +175,11 @@ export class DebugService {
       child,
       configured: false,
       state: { state: 'starting', name: `${basename(req.path)} (${config.label})`, frames: [], scopes: [] },
-      connection: new DapConnection(child, (event, body) => void this.onEvent(projectPath, session, event, body)),
+      connection: new DapConnection(child, (event, body) => void this.onEvent(projectPath, session, event, body), async (command, args) => {
+        if (command !== 'runInTerminal') throw new Error('Not supported by Saturn');
+        this.events.runInTerminal(projectPath, args.title || session.state.name || 'Debug', terminalCommand(args));
+        return {};
+      }),
     };
     this.sessions.set(projectPath, session);
     this.publish(projectPath, session);
@@ -161,7 +191,7 @@ export class DebugService {
       await session.connection.request('initialize', {
         clientID: 'saturn', clientName: 'Saturn', adapterID: owner.manifest.id, locale: 'en',
         linesStartAt1: true, columnsStartAt1: true, pathFormat: 'path',
-        supportsVariableType: true, supportsRunInTerminalRequest: false,
+        supportsVariableType: true, supportsRunInTerminalRequest: true,
       });
       session.state = { ...session.state, state: 'running' };
       this.publish(projectPath, session);

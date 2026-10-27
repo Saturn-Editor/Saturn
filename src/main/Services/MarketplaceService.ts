@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { unzipSync } from 'fflate';
@@ -138,6 +139,27 @@ export class MarketplaceService {
   }
 }
 
+/**
+ * Unzips a local .zip (Marketplace → Upload → Zip file) to a temp folder and hands `use` the folder
+ * holding `manifest`: the zip's root, or its only top-level folder (as zipping a folder makes).
+ */
+export async function withLocalZip<T>(file: string, manifest: string, use: (dir: string) => Promise<T>): Promise<T> {
+  const dir = await mkdtemp(join(tmpdir(), 'saturn-upload-'));
+  try {
+    await extract(new Uint8Array(await readFile(file)), dir);
+    let root = dir;
+    if (!existsSync(join(root, manifest))) {
+      const entries = (await readdir(dir, { withFileTypes: true })).filter((e) => !e.name.startsWith('.') && e.name !== '__MACOSX');
+      const only = entries.length === 1 && entries[0].isDirectory() ? join(dir, entries[0].name) : null;
+      if (!only || !existsSync(join(only, manifest))) throw new Error(`The zip has no ${manifest}`);
+      root = only;
+    }
+    return await use(root);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 async function readJson(file: string, missing: string): Promise<unknown> {
   try {
     return JSON.parse(await readFile(file, 'utf8'));
@@ -152,13 +174,13 @@ async function extract(zip: Uint8Array, dir: string): Promise<void> {
   try {
     files = unzipSync(zip);
   } catch {
-    throw new Error("The download isn't a valid zip");
+    throw new Error("That isn't a valid zip file");
   }
   const root = resolve(dir) + sep;
   for (const [name, data] of Object.entries(files)) {
     if (name.endsWith('/')) continue;
     const target = resolve(dir, name);
-    if (!target.startsWith(root)) throw new Error('The download contains an unsafe path');
+    if (!target.startsWith(root)) throw new Error('The zip contains an unsafe path');
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, data);
   }

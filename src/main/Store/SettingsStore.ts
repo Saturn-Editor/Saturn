@@ -26,6 +26,7 @@ export interface Settings {
   customKeymaps?: CustomKeymap[];
   autoCloseBrackets?: boolean;
   formatOnSave?: boolean;
+  branchSwitch?: 'ask' | 'bring' | 'shelve';
   textSize?: number;
   encoding?: FileEncoding;
   autoSave?: 'typing' | 'idle' | 'off';
@@ -65,6 +66,7 @@ export class SettingsStore {
       customKeymaps: s.customKeymaps ?? [],
       autoCloseBrackets: s.autoCloseBrackets ?? true,
       formatOnSave: s.formatOnSave ?? false,
+      branchSwitch: s.branchSwitch ?? 'ask',
       textSize: s.textSize ?? 100,
       encoding: s.encoding ?? 'utf-8',
       diagnostics: s.diagnostics ?? true,
@@ -110,6 +112,7 @@ export class SettingsStore {
       ...(change.customKeymaps !== undefined && { customKeymaps: change.customKeymaps }),
       ...(change.autoCloseBrackets !== undefined && { autoCloseBrackets: change.autoCloseBrackets }),
       ...(change.formatOnSave !== undefined && { formatOnSave: change.formatOnSave }),
+      ...(change.branchSwitch && ['ask', 'bring', 'shelve'].includes(change.branchSwitch) && { branchSwitch: change.branchSwitch }),
       ...(change.textSize !== undefined && { textSize: change.textSize }),
       ...(change.encoding !== undefined && FILE_ENCODINGS.some((e) => e.id === change.encoding) && { encoding: change.encoding }),
       ...(change.diagnostics !== undefined && { diagnostics: change.diagnostics }),

@@ -6,7 +6,7 @@ import {
 import { MARKETPLACE_INDEX_URL } from '@shared/marketplace';
 import { isMac } from '@renderer/commands/keymap';
 import { featureKey, LANGUAGE_FEATURES, type ContributionSnapshot, type SettingValue, type SettingValues, type ViewMode } from '@shared/modules';
-import { FILE_ENCODINGS, TEXT_SIZES, type AppSettings, type FileEncoding, type ThemeSummary, type UpdateStatus } from '@shared/types';
+import { FILE_ENCODINGS, TEXT_SIZES, type AppSettings, type BranchSwitchMode, type FileEncoding, type ThemeSummary, type UpdateStatus } from '@shared/types';
 import { Button, FieldInput, ModuleIcon, FormField, Heading, RadioList, SegmentedControl, Select, SidebarMenu, TabMenu, TextInput, Toggle } from '@renderer/components';
 import { ModeToggle } from '@renderer/theme/ModeToggle';
 
@@ -194,7 +194,7 @@ function updateText(s: UpdateStatus): string {
   }
 }
 
-/** Settings → Advanced: Saturn updates, and Reset Saturn. */
+/** Settings → Advanced: Saturn updates, Git, and Reset Saturn. */
 function AdvancedSection() {
   const settings = useAppSettings();
   const [status, setStatus] = useState<UpdateStatus | null>(null);
@@ -217,6 +217,16 @@ function AdvancedSection() {
         {status.state === 'ready' && <Button variant="primary" testId="update-install" onClick={() => void window.saturn.updates.install()}>Restart to update</Button>}
         {status.state === 'available' && <Button variant="primary" testId="update-download" onClick={() => void window.saturn.updates.install()}>Download</Button>}
         {status.state !== 'ready' && <Button testId="update-check" disabled={busy || status.state === 'unavailable'} onClick={() => void window.saturn.updates.check()}>Check for updates</Button>}
+      </div>
+      <Heading>Git</Heading>
+      <p class="mt-0 mb-2 text-muted">When switching branches with uncommitted changes:</p>
+      <div class="mb-5">
+        <SegmentedControl<BranchSwitchMode>
+          label="When switching branches with uncommitted changes"
+          value={settings.branchSwitch}
+          onChange={(branchSwitch) => void window.saturn.settings.update({ branchSwitch })}
+          options={[{ id: 'ask', label: 'Ask each time' }, { id: 'bring', label: 'Bring them along' }, { id: 'shelve', label: 'Shelve for that branch' }]}
+        />
       </div>
       <Heading>Reset Saturn</Heading>
       <p class="mt-0 mb-2.5 text-muted">
