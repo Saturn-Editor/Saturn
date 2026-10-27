@@ -1,11 +1,13 @@
 import { render, type ComponentType } from 'preact';
 import type { WindowKind } from '@shared/types';
 import { EditorScreen } from './screens/editor/EditorScreen';
-import { MarketplaceScreen } from './screens/marketplace/MarketplaceScreen';
-import { NewProjectScreen } from './screens/newProject/NewProjectScreen';
-import { SettingsScreen } from './screens/settings/SettingsScreen';
-import { WelcomeScreen } from './screens/welcome/WelcomeScreen';
+import { MarketplaceScreen } from './screens/MarketplaceScreen';
+import { NewProjectScreen } from './screens/NewProjectScreen';
+import { OnboardingScreen } from './screens/OnboardingScreen';
+import { SettingsScreen } from './screens/SettingsScreen';
+import { WelcomeScreen } from './screens/WelcomeScreen';
 import { ThemeApplier } from './theme/ThemeApplier';
+import { followKeymap } from './commands/keymap';
 import './styles.css';
 
 const screens: Record<WindowKind, ComponentType> = {
@@ -14,9 +16,11 @@ const screens: Record<WindowKind, ComponentType> = {
   settings: SettingsScreen,
   'new-project': NewProjectScreen,
   marketplace: MarketplaceScreen,
+  onboarding: OnboardingScreen,
 };
 
 // Apply the theme before the first render so there's no flash of unstyled colours.
 await new ThemeApplier().follow();
+await followKeymap();
 const Screen = screens[window.saturn.window.kind];
 render(<Screen />, document.getElementById('app')!);

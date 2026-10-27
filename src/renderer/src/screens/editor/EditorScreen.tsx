@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
+import { actionForKey } from '@renderer/commands/keymap';
 import { Dock } from '@renderer/panels/Dock';
 import { IconStrip } from '@renderer/panels/IconStrip';
 import { EditorArea } from './EditorArea';
@@ -13,6 +14,21 @@ export function EditorScreen() {
     const workspace = new EditorWorkspace(window.saturn, window.saturn.window.projectPath!);
     void workspace.load().then(() => setWs(workspace));
   }, []);
+
+  // Window-wide shortcuts from the chosen keymap (Save, Close Tab, Toggle Terminal…). Listening in the
+  // capture phase means they still work while the terminal has focus, which swallows key presses.
+  useEffect(() => {
+    if (!ws) return;
+    const onKey = (e: KeyboardEvent) => {
+      const id = actionForKey(e, 'app');
+      if (!id) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void ws.commands.run(id).catch(() => undefined);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [ws]);
 
   if (!ws) return null;
   ws.layout.state.value; // re-render on layout changes

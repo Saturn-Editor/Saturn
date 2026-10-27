@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { RunEntry } from '@shared/types';
-import { Button, ChevronDownIcon, IconButton, Menu, PlayIcon, StopIcon, TextInput, type MenuEntry } from '@renderer/components';
+import { Button, ChevronDownIcon, ContextMenu, IconButton, PlayIcon, StopIcon, TextInput, type MenuEntry } from '@renderer/components';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
 
 const ADD = '__add__';
@@ -36,6 +36,7 @@ export function RunMenu() {
   const [entries, setEntries] = useState<RunEntry[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const selectRef = useRef<HTMLButtonElement>(null);
   const [adding, setAdding] = useState(false);
   const [runningTerminal, setRunningTerminal] = useState<string | null>(null);
   ws.terminals.tabs.value; // re-render when a run finishes
@@ -64,7 +65,6 @@ export function RunMenu() {
   items.push({ separator: true }, { id: ADD, label: '＋ Add custom command…', testId: 'run-add' });
 
   const pick = async (id: string) => {
-    setMenuOpen(false);
     if (id === ADD) return setAdding(true);
     await window.saturn.run.select(id);
     setSelectedId(id);
@@ -73,6 +73,7 @@ export function RunMenu() {
   return (
     <div class="relative flex items-center gap-1">
       <button
+        ref={selectRef}
         type="button"
         data-testid="run-select"
         onClick={() => setMenuOpen(!menuOpen)}
@@ -88,7 +89,9 @@ export function RunMenu() {
         disabled={!ws.terminals.isRunning(runningTerminal)}
         onClick={() => runningTerminal && ws.terminals.stop(runningTerminal)}
       />
-      {menuOpen && <Menu class="top-8 right-0 w-72" items={items} selectedIndex={-1} onPick={(id) => void pick(id)} />}
+      {menuOpen && (
+        <ContextMenu class="top-8 right-0 w-72" anchor={selectRef} items={items} onPick={(id) => void pick(id)} onClose={() => setMenuOpen(false)} />
+      )}
       {adding && (
         <AddCommandForm
           onCancel={() => setAdding(false)}

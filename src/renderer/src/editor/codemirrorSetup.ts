@@ -1,10 +1,13 @@
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
-import { bracketMatching } from '@codemirror/language';
-import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search';
-import { Compartment, EditorState } from '@codemirror/state';
 import {
-  drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers,
+  copyLineDown, defaultKeymap, deleteLine, history, historyKeymap, indentWithTab, moveLineDown, moveLineUp,
+} from '@codemirror/commands';
+import { bracketMatching } from '@codemirror/language';
+import { gotoLine, highlightSelectionMatches, openSearchPanel, search, searchKeymap } from '@codemirror/search';
+import { Compartment, EditorState, Prec } from '@codemirror/state';
+import {
+  drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, type Command,
 } from '@codemirror/view';
+import { actionForKey } from '@renderer/commands/keymap';
 
 /** Plan 3 puts language support (highlighting, completion) in here; the core leaves it empty. */
 export const languageCompartment = new Compartment();
@@ -37,9 +40,33 @@ const saturnTheme = EditorView.theme({
 
 export interface EditorCallbacks {
   onChange: (text: string) => void;
-  onSave: () => void;
   onCursor: (label: string) => void;
 }
+
+const EDITOR_COMMANDS: Record<string, Command> = {
+  'editor.find': openSearchPanel,
+  'editor.replace': openSearchPanel,
+  'editor.gotoLine': gotoLine,
+  'editor.duplicateLine': copyLineDown,
+  'editor.deleteLine': deleteLine,
+  'editor.moveLineUp': moveLineUp,
+  'editor.moveLineDown': moveLineDown,
+};
+
+/**
+ * The chosen keymap's editor shortcuts (Settings → Keymap). It looks the keymap up on every key press,
+ * so switching keymaps applies to open files at once; it runs before CodeMirror's own default keys.
+ */
+const keymapShortcuts = Prec.high(EditorView.domEventHandlers({
+  keydown(e, view) {
+    const id = actionForKey(e, 'editor');
+    const command = id ? EDITOR_COMMANDS[id] : undefined;
+    if (!command) return false;
+    e.preventDefault();
+    command(view);
+    return true;
+  },
+}));
 
 /** Builds the state for one plain-text document. */
 export function createEditorState(text: string, callbacks: EditorCallbacks): EditorState {
@@ -55,8 +82,8 @@ export function createEditorState(text: string, callbacks: EditorCallbacks): Edi
       search({ top: false }),
       highlightSelectionMatches(),
       languageCompartment.of([]),
+      keymapShortcuts,
       keymap.of([
-        { key: 'Mod-s', preventDefault: true, run: () => (callbacks.onSave(), true) },
         ...defaultKeymap,
         ...historyKeymap,
         ...searchKeymap,

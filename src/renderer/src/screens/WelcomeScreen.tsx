@@ -1,23 +1,15 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { ContributionSnapshot } from '@shared/modules';
 import type { RecentProject } from '@shared/types';
-import appIconUrl from '../../../../../resources/icons/icon.svg?url';
-import { Button, LanguageBadges, SidebarNav, TextInput } from '@renderer/components';
+import { Button, LanguageBadges, Logo, SidebarMenu, TextInput } from '@renderer/components';
 import { EMPTY_SNAPSHOT, projectBadges } from '@renderer/modules/ModuleBridge';
+import { AboutPage } from './AboutPage';
+import { AppearanceSection } from './SettingsScreen';
 
-type Page = 'projects' | 'marketplace' | 'settings';
+type Page = 'projects' | 'appearance' | 'marketplace' | 'settings' | 'about';
+/** Pages shown inside the Welcome window (Marketplace and Settings open their own windows). */
+type LocalPage = Exclude<Page, 'marketplace' | 'settings'>;
 
-function SaturnHeader() {
-  return (
-    <div class="flex items-center gap-2 px-3.5 pt-3.5 pb-4">
-      <img src={appIconUrl} alt="" class="size-7" />
-      <div>
-        <div class="font-semibold text-strong">Saturn</div>
-        <div class="text-muted" data-testid="app-version">{__SATURN_VERSION__}</div>
-      </div>
-    </div>
-  );
-}
 
 function ProjectRow({ project, badges, onOpen, onRemove }: { project: RecentProject; badges: string[]; onOpen: () => void; onRemove: () => void }) {
   const [confirming, setConfirming] = useState(false);
@@ -48,6 +40,7 @@ export function WelcomeScreen() {
   const [projects, setProjects] = useState<RecentProject[]>([]);
   const [query, setQuery] = useState('');
   const [modules, setModules] = useState<ContributionSnapshot>(EMPTY_SNAPSHOT);
+  const [page, setPage] = useState<LocalPage>('projects');
 
   const load = () => void window.saturn.projects.recent().then(setProjects);
   useEffect(() => {
@@ -61,9 +54,10 @@ export function WelcomeScreen() {
     };
   }, []);
 
-  const select = (page: Page) => {
-    if (page === 'settings') window.saturn.windows.openSettings();
-    if (page === 'marketplace') window.saturn.windows.openMarketplace();
+  const select = (target: Page) => {
+    if (target === 'settings') window.saturn.windows.openSettings();
+    else if (target === 'marketplace') window.saturn.windows.openMarketplace();
+    else setPage(target);
   };
 
   const badgesFor = (p: RecentProject) => projectBadges(modules, p.languageIds);
@@ -77,12 +71,22 @@ export function WelcomeScreen() {
 
   return (
     <div class="flex h-full" data-testid="screen-welcome">
-      <SidebarNav<Page>
-        header={<SaturnHeader />}
-        items={[{ id: 'projects', label: 'Projects' }, { id: 'marketplace', label: 'Marketplace' }, { id: 'settings', label: 'Settings' }]}
-        selected="projects"
+      <SidebarMenu<Page>
+        header={<div class="px-3.5 pt-3.5 pb-4"><Logo class="h-8" /></div>}
+        items={[
+          { id: 'projects', label: 'Projects' },
+          { id: 'appearance', label: 'Appearance' },
+          { id: 'marketplace', label: 'Marketplace' },
+          { id: 'settings', label: 'Settings' },
+        ]}
+        bottomItems={[{ id: 'about', label: 'About' }]}
+        selected={page}
         onSelect={select}
       />
+      {page === 'about' && <AboutPage />}
+      {/* The same Appearance section as in Settings. */}
+      {page === 'appearance' && <main class="flex-1 p-4 overflow-y-auto min-w-0" data-testid="welcome-appearance"><AppearanceSection /></main>}
+      {page === 'projects' && (
       <main class="flex-1 flex flex-col p-3.5 min-w-0">
         <div class="flex gap-2 mb-3.5">
           <TextInput class="flex-1" value={query} onInput={setQuery} placeholder="Search projects" />
@@ -103,6 +107,7 @@ export function WelcomeScreen() {
           {projects.length === 0 && <p class="text-muted px-2.5">No recent projects yet. Create or open one to get started.</p>}
         </div>
       </main>
+      )}
     </div>
   );
 }

@@ -1,12 +1,15 @@
-import type { Theme } from '@shared/types';
+import { THEME_TOKENS, type Theme } from '@shared/types';
 
 const TAILWIND_COLOR = /^([a-z]+(?:-\d{2,3})?)(?:\/(\d{1,3}))?$/;
 
 /**
  * Turns a theme colour into CSS. Theme files use Tailwind colour names, optionally with an
  * opacity ("neutral-900", "amber-500/18", "white/5"); anything else is passed through as plain CSS.
+ * Syntax rules can also name one of the theme's own tokens ("text", "muted"), e.g. so code embedded in
+ * a string goes back to the normal text colour.
  */
 export function resolveColor(value: string): string {
+  if ((THEME_TOKENS as readonly string[]).includes(value.trim())) return `var(--saturn-${value.trim()})`;
   const match = TAILWIND_COLOR.exec(value.trim());
   if (!match) return value;
   const [, name, opacity] = match;

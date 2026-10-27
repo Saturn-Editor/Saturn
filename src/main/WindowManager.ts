@@ -9,6 +9,7 @@ const SIZES: Record<WindowKind, { width: number; height: number; minWidth?: numb
   settings: { width: 720, height: 520 },
   'new-project': { width: 820, height: 560 },
   marketplace: { width: 860, height: 560 },
+  onboarding: { width: 560, height: 640 },
 };
 
 /** Window/taskbar icon: .ico on Windows, .png elsewhere (macOS uses the Dock icon set in SaturnApp). */
@@ -22,6 +23,14 @@ export class WindowManager {
   private readonly singles = new Map<WindowKind, BrowserWindow>();
   private readonly dirty = new Set<number>();
   private quitting = false;
+  /** Appearance → Text size, as a zoom factor applied to every window. */
+  private zoom = 1;
+  private readonly editorClosedListeners: ((projectPath: string) => void)[] = [];
+
+  /** Called with the project path whenever an editor window has closed. */
+  onEditorClosed(listener: (projectPath: string) => void): void {
+    this.editorClosedListeners.push(listener);
+  }
 
   constructor() {
     app.on('before-quit', () => (this.quitting = true));
@@ -66,6 +75,7 @@ export class WindowManager {
     win.on('closed', () => {
       this.dirty.delete(win.id);
       this.editors.delete(key);
+      this.editorClosedListeners.forEach((l) => l(key));
       if (this.editors.size === 0 && !this.quitting) this.openWelcome();
     });
     this.welcome?.close();
@@ -82,6 +92,20 @@ export class WindowManager {
 
   openMarketplace(parent: BrowserWindow, section?: string): BrowserWindow {
     return this.openSingle('marketplace', parent, section ? { section } : {});
+  }
+
+  /** The first-launch "Welcome to Saturn" popup, modal over the Welcome window. */
+  openOnboarding(parent: BrowserWindow): BrowserWindow {
+    const win = this.create('onboarding', {}, { parent, modal: true, resizable: false, minimizable: false });
+    this.singles.set('onboarding', win);
+    win.on('closed', () => this.singles.delete('onboarding'));
+    return win;
+  }
+
+  /** Sets the text size (1 = 100%) on every open window and on ones opened later. */
+  setZoom(factor: number): void {
+    this.zoom = factor;
+    for (const win of BrowserWindow.getAllWindows()) win.webContents.setZoomFactor(factor);
   }
 
   /** Editor windows with the project path each one shows. */
@@ -139,6 +163,7 @@ export class WindowManager {
         additionalArguments,
       },
     });
+    win.webContents.on('did-finish-load', () => win.webContents.setZoomFactor(this.zoom));
     win.once('ready-to-show', () => win.show());
     if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL);
     else void win.loadFile(join(import.meta.dirname, '../renderer/index.html'));

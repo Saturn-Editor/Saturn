@@ -6,7 +6,6 @@ export interface Command {
   id: string;
   title: string;
   source: { id: 'core' | string; label: string; icon?: ComponentChild };
-  shortcut?: string;
   run: () => void | Promise<void>;
 }
 

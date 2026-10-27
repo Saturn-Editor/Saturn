@@ -19,9 +19,9 @@ test('settings switches the theme live', async () => {
   const welcome = await app.firstWindow();
   await welcome.getByRole('button', { name: 'Settings' }).click();
   const settings = await app.waitForEvent('window');
-  await settings.getByRole('radio', { name: /Saturn Light/ }).click();
+  await settings.getByRole('radio', { name: 'Light', exact: true }).click();
   await expect(welcome.locator('html')).toHaveAttribute('data-theme-type', 'light');
-  await settings.getByRole('radio', { name: /Saturn Dark/ }).click();
+  await settings.getByRole('radio', { name: 'Dark', exact: true }).click();
   await expect(welcome.locator('html')).toHaveAttribute('data-theme-type', 'dark');
   await app.close();
 });

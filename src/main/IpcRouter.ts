@@ -1,21 +1,24 @@
-import { stat } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { BrowserWindow, dialog, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron';
+import { basename, join, resolve } from 'node:path';
+import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { channel } from '@shared/api';
-import type { CompletionRequest } from '@shared/modules';
-import type { LayoutState, NewProjectRequest, RunEntry } from '@shared/types';
-import type { ExtensionHostService } from '../Services/ExtensionHostService';
-import { FileService } from '../Services/FileService';
-import type { LanguageServerService } from '../Services/LanguageServerService';
-import type { ModuleService } from '../Services/ModuleService';
-import type { ProjectCreator } from '../Services/ProjectCreator';
-import type { TerminalService } from '../Services/TerminalService';
-import type { ThemeService } from '../Services/ThemeService';
-import type { LayoutStore } from '../Store/LayoutStore';
-import type { RecentProjectsStore } from '../Store/RecentProjectsStore';
-import type { RunConfigStore } from '../Store/RunConfigStore';
-import type { WindowManager } from '../Windows/WindowManager';
+import { SATURN_API_VERSION, type CompletionRequest, type SettingValue, type TreeItem } from '@shared/modules';
+import type { AppFolder, AppInfo, AppSettings, LayoutState, NewProjectRequest, RunEntry, ThemeMode } from '@shared/types';
+import type { AppPaths } from './Helpers/AppPaths';
+import type { ExtensionHostService } from './Services/ExtensionHostService';
+import { FileService } from './Services/FileService';
+import type { LanguageServerService } from './Services/LanguageServerService';
+import type { MarketplaceService } from './Services/MarketplaceService';
+import type { ModuleService } from './Services/ModuleService';
+import type { ProjectCreator } from './Services/ProjectCreator';
+import type { TerminalService } from './Services/TerminalService';
+import type { ThemeService } from './Services/ThemeService';
+import type { LayoutStore } from './Store/LayoutStore';
+import type { RecentProjectsStore } from './Store/RecentProjectsStore';
+import type { RunConfigStore } from './Store/RunConfigStore';
+import type { SettingsStore } from './Store/SettingsStore';
+import type { WindowManager } from './WindowManager';
 
 export interface SaturnServices {
   windows: WindowManager;
@@ -28,6 +31,9 @@ export interface SaturnServices {
   modules: ModuleService;
   host: ExtensionHostService;
   languageServers: LanguageServerService;
+  marketplace: MarketplaceService;
+  settings: SettingsStore;
+  paths: AppPaths;
 }
 
 type Handler = (event: IpcMainInvokeEvent, ...args: any[]) => unknown;
@@ -48,6 +54,61 @@ export class IpcRouter {
     this.registerTerminals();
     this.registerRun();
     this.registerModules();
+    this.registerMarketplace();
+    this.registerSettings();
+    this.registerApp();
+  }
+
+  private registerApp(): void {
+    const { paths } = this.services;
+    const folders: Record<AppFolder, { label: string; path: string }> = {
+      install: { label: 'Installed in', path: app.getAppPath() },
+      userData: { label: 'Settings and data', path: paths.root },
+      modules: { label: 'Languages', path: paths.dir('modules') },
+      themes: { label: 'Themes', path: paths.dir('themes') },
+    };
+    const osName: Record<string, string> = { darwin: 'macOS', win32: 'Windows', linux: 'Linux' };
+    this.handle('app', 'info', (): AppInfo => ({
+      version: app.getVersion(),
+      saturnApi: SATURN_API_VERSION,
+      electron: process.versions.electron,
+      chrome: process.versions.chrome,
+      node: process.versions.node,
+      v8: process.versions.v8,
+      os: `${osName[process.platform] ?? process.platform} ${process.getSystemVersion()} (${process.arch})`,
+      locale: app.getLocale(),
+      folders: Object.entries(folders).map(([id, f]) => ({ id: id as AppFolder, ...f })),
+    }));
+    // Only the folders listed above can be opened, never an arbitrary path from the renderer.
+    this.handle('app', 'openFolder', async (_e, id: AppFolder) => {
+      const folder = folders[id];
+      if (!folder) throw new Error(`Unknown folder: ${id}`);
+      await mkdir(folder.path, { recursive: true });
+      const problem = await shell.openPath(folder.path);
+      if (problem) throw new Error(problem);
+    });
+  }
+
+  private registerSettings(): void {
+    const { settings, marketplace } = this.services;
+    this.handle('settings', 'get', () => settings.app());
+    this.handle('settings', 'update', async (_e, change: Partial<AppSettings>) => {
+      const next = await settings.updateApp(change);
+      if (change.marketplaceUrl !== undefined) marketplace.forgetIndex();
+      if (change.textSize !== undefined) this.services.windows.setZoom(next.textSize / 100);
+      this.broadcast('settings', 'changed', next);
+      return next;
+    });
+  }
+
+  private registerMarketplace(): void {
+    const { marketplace } = this.services;
+    this.handle('marketplace', 'index', () => marketplace.fetchIndex());
+    this.handle('marketplace', 'installLanguage', (_e, id: string) => marketplace.installLanguage(id));
+    this.handle('marketplace', 'installTheme', async (_e, id: string) => {
+      await marketplace.installTheme(id);
+      this.broadcast('themes', 'listChanged');
+    });
   }
 
   /** Sends an event to every open window. */
@@ -80,11 +141,20 @@ export class IpcRouter {
     });
     this.handle('modules', 'uninstall', (_e, id: string) => modules.uninstall(id));
     this.handle('modules', 'setEnabled', (_e, id: string, enabled: boolean) => modules.setEnabled(id, enabled));
+    this.handle('modules', 'settings', (_e, moduleId: string) => modules.settings(moduleId));
+    this.handle('modules', 'setSetting', (_e, moduleId: string, id: string, value: SettingValue) => modules.setSetting(moduleId, id, value));
     this.handle('modules', 'runCommand', (e, id: string) => host.runCommand(id, ctx(e)));
     this.handle('modules', 'treeChildren', (e, panelId: string, parentId: string | null) => host.treeChildren(panelId, parentId, ctx(e)));
+    this.handle('modules', 'treeAction', (e, panelId: string, actionId: string, item: TreeItem) => host.treeAction(panelId, actionId, item, ctx(e)));
     this.handle('modules', 'renderPreview', (e, id: string, text: string, path: string) => host.renderPreview(id, text, { ...ctx(e), path }));
     this.handle('modules', 'templateFile', (e, id: string, name: string, dir: string) => host.templateFile(id, { ...ctx(e), name, dir }));
     this.handle('modules', 'complete', (e, req: CompletionRequest) => languageServers.complete(this.projectOf(e), req));
+    this.handle('modules', 'hover', (e, req: CompletionRequest) => languageServers.hover(this.projectOf(e), req));
+    this.handle('modules', 'definition', (e, req: CompletionRequest) => languageServers.definition(this.projectOf(e), req));
+    this.handle('modules', 'syncDocument', async (e, req: { path: string; languageId: string; text: string }) => {
+      await languageServers.sync(this.projectOf(e), req);
+    });
+    this.handle('modules', 'closeDocument', (e, req: { path: string; languageId: string }) => languageServers.close(this.projectOf(e), req));
 
     this.on('windows', 'openMarketplace', (e, section?: string) => windows.openMarketplace(this.senderWindow(e), section));
   }
@@ -151,6 +221,10 @@ export class IpcRouter {
       const result = await dialog.showOpenDialog(this.senderWindow(e), { properties: ['openDirectory', 'createDirectory'] });
       return result.canceled ? null : (result.filePaths[0] ?? null);
     });
+    this.handle('projects', 'pickFile', async (e) => {
+      const result = await dialog.showOpenDialog(this.senderWindow(e), { properties: ['openFile'] });
+      return result.canceled ? null : (result.filePaths[0] ?? null);
+    });
     this.handle('projects', 'create', async (e, req: NewProjectRequest) => {
       const sender = this.senderWindow(e);
       const path = await creator.create(req);
@@ -174,6 +248,14 @@ export class IpcRouter {
     this.handle('themes', 'setActive', async (_e, id: string) => {
       this.broadcast('themes', 'changed', await themes.setActive(id));
     });
+    this.handle('themes', 'mode', () => themes.mode());
+    this.handle('themes', 'syncWithOs', () => themes.syncWithOs());
+    this.handle('themes', 'setSyncWithOs', async (_e, on: boolean) => {
+      this.broadcast('themes', 'changed', await themes.setSyncWithOs(on));
+    });
+    this.handle('themes', 'setMode', async (_e, mode: ThemeMode) => {
+      this.broadcast('themes', 'changed', await themes.setMode(mode));
+    });
     this.handle('themes', 'installDialog', async (e) => {
       const result = await dialog.showOpenDialog(this.senderWindow(e), {
         title: 'Install a theme from a folder',
@@ -196,8 +278,13 @@ export class IpcRouter {
     const sender = event.sender;
     const existing = this.files.get(sender.id);
     if (existing) return existing.service;
-    const service = new FileService(this.projectOf(event));
-    const stopWatching = service.watch((dir) => this.send(sender, 'fs', 'changed', dir));
+    const projectPath = this.projectOf(event);
+    const service = new FileService(projectPath);
+    // One watcher per project window feeds both the explorer and modules (saturn.workspace.onDidChangeFiles).
+    const stopWatching = service.watch((dir) => {
+      this.send(sender, 'fs', 'changed', dir);
+      this.services.host.filesChanged(projectPath, dir);
+    });
     this.files.set(sender.id, { service, stopWatching });
     sender.once('destroyed', () => {
       this.files.get(sender.id)?.stopWatching();
@@ -212,6 +299,27 @@ export class IpcRouter {
     this.handle('fs', 'writeFile', (e, path: string, text: string) => this.filesFor(e).writeFile(path, text));
     this.handle('fs', 'createFile', (e, path: string, text?: string) => this.filesFor(e).createFile(path, text));
     this.handle('fs', 'createDir', (e, path: string) => this.filesFor(e).createDir(path));
+    this.handle('fs', 'rename', (e, path: string, newName: string) => this.filesFor(e).rename(path, newName));
+    /** Asks first, then moves the file or folder to the Trash (recoverable); false if the user cancelled. */
+    this.handle('fs', 'trash', async (e, path: string) => {
+      const full = this.filesFor(e).entry(path);
+      const bin = process.platform === 'win32' ? 'Recycle Bin' : 'Trash';
+      const { response } = await dialog.showMessageBox(this.senderWindow(e), {
+        type: 'warning',
+        message: `Move "${basename(full)}" to the ${bin}?`,
+        detail: `You can restore it from the ${bin}.`,
+        buttons: [`Move to ${bin}`, 'Cancel'],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      if (response !== 0) return false;
+      await shell.trashItem(full);
+      return true;
+    });
+    this.handle('fs', 'reveal', (e, path: string) => {
+      const root = this.projectOf(e);
+      shell.showItemInFolder(resolve(root, path) === resolve(root) ? root : this.filesFor(e).entry(path));
+    });
   }
 
   private registerLayout(): void {

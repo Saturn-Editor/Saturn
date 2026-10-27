@@ -64,19 +64,51 @@ export function clearGrammars(): void {
   registry = null;
 }
 
+/** "keyword" matches "keyword" and "keyword.control.cs", but not "keywords". */
+function scopeMatches(scope: string, selector: string): boolean {
+  return scope === selector || scope.startsWith(`${selector}.`);
+}
+
 /**
- * The theme rule for a token's scopes: the innermost scope that matches a rule wins, and a rule
- * matches a scope equal to it or starting with it plus "." (so "keyword" matches "keyword.control").
+ * How well a rule matches the scope at `index` (higher is more specific), or -1. A rule's scope may
+ * name ancestors first, space-separated ("comment.block.documentation entity.name.tag"): the last
+ * part must match this scope and the others must match outer scopes, in order.
  */
-function ruleFor(scopes: string[], rules: SyntaxRule[]): SyntaxRule | null {
-  for (let i = scopes.length - 1; i >= 0; i--) {
-    let best: SyntaxRule | null = null;
-    for (const rule of rules) {
-      if ((scopes[i] === rule.scope || scopes[i].startsWith(`${rule.scope}.`)) && (!best || rule.scope.length > best.scope.length)) best = rule;
-    }
-    if (best) return best;
+function specificity(rule: SyntaxRule, scopes: string[], index: number): number {
+  const parts = rule.scope.trim().split(/\s+/);
+  if (!scopeMatches(scopes[index], parts[parts.length - 1])) return -1;
+  let outer = index - 1;
+  for (let p = parts.length - 2; p >= 0; p--) {
+    while (outer >= 0 && !scopeMatches(scopes[outer], parts[p])) outer--;
+    if (outer < 0) return -1;
+    outer--;
   }
-  return null;
+  return parts.length * 1000 + parts[parts.length - 1].length;
+}
+
+/**
+ * A token's style, VS Code style: scopes are checked from innermost outwards and each picks its most
+ * specific rule. Colour and font style are taken separately from the innermost rule that sets each, so
+ * a rule without a colour (e.g. string quotes) keeps the surrounding colour.
+ */
+function styleFor(scopes: string[], rules: SyntaxRule[]): SyntaxRule | null {
+  let color: string | undefined;
+  let fontStyle: string | undefined;
+  for (let i = scopes.length - 1; i >= 0 && (color === undefined || fontStyle === undefined); i--) {
+    let best: SyntaxRule | null = null;
+    let bestScore = -1;
+    for (const rule of rules) {
+      const score = specificity(rule, scopes, i);
+      if (score > bestScore) {
+        best = rule;
+        bestScore = score;
+      }
+    }
+    if (!best) continue;
+    color ??= best.color;
+    fontStyle ??= best.fontStyle;
+  }
+  return color === undefined && !fontStyle ? null : { scope: '', color, fontStyle };
 }
 
 const themeChanged = StateEffect.define<null>();
@@ -86,7 +118,14 @@ function markFor(rule: SyntaxRule): Decoration {
   const key = `${rule.color}|${rule.fontStyle ?? ''}`;
   let mark = markCache.get(key);
   if (!mark) {
-    const style = `color: ${resolveColor(rule.color)};${rule.fontStyle === 'italic' ? ' font-style: italic;' : ''}${rule.fontStyle === 'bold' ? ' font-weight: 600;' : ''}`;
+    const styles = new Set((rule.fontStyle ?? '').split(/\s+/));
+    const lines = [styles.has('underline') && 'underline', styles.has('strikethrough') && 'line-through'].filter(Boolean);
+    const style = [
+      rule.color && `color: ${resolveColor(rule.color)};`,
+      styles.has('bold') && 'font-weight: 600;',
+      styles.has('italic') && 'font-style: italic;',
+      lines.length > 0 && `text-decoration: ${lines.join(' ')};`,
+    ].filter(Boolean).join(' ');
     mark = Decoration.mark({ attributes: { style } });
     markCache.set(key, mark);
   }
@@ -122,7 +161,7 @@ export function textMateHighlighting(grammar: IGrammar): Extension {
       const line = doc.line(n);
       const result = grammar.tokenizeLine(line.text, state);
       for (const token of result.tokens) {
-        const rule = ruleFor(token.scopes, rules);
+        const rule = styleFor(token.scopes, rules);
         const end = Math.min(token.endIndex, line.length);
         if (rule && end > token.startIndex) builder.add(line.from + token.startIndex, line.from + end, markFor(rule));
       }
