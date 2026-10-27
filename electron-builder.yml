@@ -47,6 +47,8 @@ win:
       arch: [x64, arm64]
 
 nsis:
+  # A fixed name without spaces, so the release description can link to it (the Release workflow).
+  artifactName: Saturn-Setup-${version}.${ext}
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
@@ -55,6 +57,23 @@ nsis:
 linux:
   icon: resources/icons/icon.png
   category: Development
+  executableName: saturn
+  # Shown by package managers for the .deb and .rpm (they require a maintainer).
+  maintainer: Saturn Editor <https://github.com/Saturn-Editor/Saturn>
+  # AppImage runs on most distributions; the .deb (Debian, Ubuntu) and .rpm (Fedora) install like
+  # other packages. Auto-update works for the AppImage; .deb/.rpm users update by installing the new package.
   target:
     - target: AppImage
-      arch: [x64]
+      arch: [x64, arm64]
+    - target: deb
+      arch: [x64, arm64]
+    - target: rpm
+      arch: [x64, arm64]
+
+# Fixed names (Saturn-<version>-x64 / -arm64), so the release description can link to them.
+appImage:
+  artifactName: Saturn-${version}-${arch}.${ext}
+deb:
+  artifactName: Saturn-${version}-${arch}.${ext}
+rpm:
+  artifactName: Saturn-${version}-${arch}.${ext}
