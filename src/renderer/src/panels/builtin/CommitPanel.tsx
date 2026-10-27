@@ -132,10 +132,16 @@ export function CommitPanel() {
     const paths = changes.map((c) => c.path);
     void act('stage', () => (stagingOfAll(changes) === 'all' ? window.saturn.git.unstage(paths) : window.saturn.git.stage(paths)));
   };
-  const commit = () => void act('commit', async () => {
-    await window.saturn.git.commit(message);
-    setMessage('');
-  });
+  /** Resolves true once committed, so Commit and push only pushes a successful commit. */
+  const commit = async () => {
+    let done = false;
+    await act('commit', async () => {
+      await window.saturn.git.commit(message);
+      setMessage('');
+      done = true;
+    });
+    return done;
+  };
   const canCommit = stagedCount > 0 && message.trim() !== '' && !busy;
   const push = async () => {
     if (!status.upstream) {
@@ -143,6 +149,9 @@ export function CommitPanel() {
       if (list.length > 1 && !list.some((r) => r.name === 'origin')) return setRemotes(list);
     }
     void act('push', () => window.saturn.git.push());
+  };
+  const commitAndPush = async () => {
+    if (await commit()) await push();
   };
   const showDiff = (c: GitChange) => ws.documents.openDiff(`working:${c.path}`, `${c.path.split('/').pop()} (changes)`, { workingPath: c.path });
 
@@ -261,14 +270,15 @@ export function CommitPanel() {
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (isMac ? e.metaKey : e.ctrlKey) && canCommit) {
               e.preventDefault();
-              commit();
+              void commit();
             }
           }}
         />
         <div class="flex gap-1.5">
-          <Button variant="primary" class="flex-1" testId="git-commit" disabled={!canCommit} onClick={commit}>
+          <Button variant="primary" class="flex-1" testId="git-commit" disabled={!canCommit} onClick={() => void commit()}>
             {busy === 'commit' ? 'Committing…' : `Commit ${stagedCount} file${stagedCount === 1 ? '' : 's'}`}
           </Button>
+          <Button testId="git-commit-push" disabled={!canCommit} onClick={() => void commitAndPush()}>Commit and push</Button>
           {/* Stashes every change, using the message box (if filled) as the stash's name. */}
           <Button testId="git-stash" disabled={!!busy || status.changes.length === 0} onClick={() => void act('stash', async () => {
             await window.saturn.git.stash(message);

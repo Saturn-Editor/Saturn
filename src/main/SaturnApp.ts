@@ -8,6 +8,7 @@ import { ICON_FILE_NAME, ICON_FILES, ICON_SCHEME } from '@shared/modules';
 import { spawn } from 'node-pty';
 import { AppPaths, SATURN_DATA } from './Helpers/AppPaths';
 import { setUpAppMenu } from './Helpers/appMenu';
+import { adoptLoginShellPath } from './Helpers/loginShellPath';
 import { IpcRouter } from './IpcRouter';
 import { ExtensionHostService } from './Services/ExtensionHostService';
 import { LanguageServerService } from './Services/LanguageServerService';
@@ -53,6 +54,8 @@ export class SaturnApp {
     app.setName('Saturn');
     // Must run before 'ready' so every store and Chromium profile lands in the override.
     if (process.env.SATURN_USER_DATA) app.setPath('userData', process.env.SATURN_USER_DATA);
+    // Before anything spawns tools (language servers, git, terminals) that must be found on PATH.
+    if (app.isPackaged) adoptLoginShellPath();
     // Installed languages', extensions' and themes' icon.svg / icon.png, served to windows (see serveIcons).
     protocol.registerSchemesAsPrivileged([{ scheme: ICON_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
   }
