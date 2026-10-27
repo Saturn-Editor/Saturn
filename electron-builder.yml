@@ -24,7 +24,8 @@ publish:
   provider: github
   owner: Saturn-Editor
   repo: Saturn
-  releaseType: release
+  # The Release workflow creates the draft and publishes it once every platform has uploaded.
+  releaseType: draft
 
 mac:
   category: public.app-category.developer-tools
