@@ -80,16 +80,22 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then link="$MAC_CSC_LINK"; password="$MAC_CSC_KEY_PASSWORD"; else link="$WIN_CSC_LINK"; password="$WIN_CSC_KEY_PASSWORD"; fi
+          extra=()
           if [ -n "$link" ]; then
             export CSC_LINK="$link" CSC_KEY_PASSWORD="$password"
           else
-            echo "No signing certificate set: building unsigned."
             export CSC_IDENTITY_AUTO_DISCOVERY=false
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              echo "No signing certificate set: ad-hoc signing the Mac app."
+              extra=(-c.mac.identity=-)
+            else
+              echo "No signing certificate set: building unsigned."
+            fi
           fi
           if [ "$RUNNER_OS" = "macOS" ] && [ -n "$NOTARIZE_APPLE_ID" ]; then
             export APPLE_ID="$NOTARIZE_APPLE_ID" APPLE_APP_SPECIFIC_PASSWORD="$NOTARIZE_PASSWORD" APPLE_TEAM_ID="$NOTARIZE_TEAM_ID"
           fi
-          npx electron-builder --publish always
+          npx electron-builder --publish always "${extra[@]}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MAC_CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -117,15 +123,16 @@ jobs:
             echo
             # Linux lines link both architectures: "[Saturn-1.0.0-x64.deb](…) · [Saturn-1.0.0-arm64.deb](…)".
             linux() { echo "[Saturn-$version-x64.$1]($base/Saturn-$version-x64.$1) · [Saturn-$version-arm64.$1]($base/Saturn-$version-arm64.$1)"; }
+            echo ""
             echo "- **Windows:** [Saturn-Setup-$version.exe]($base/Saturn-Setup-$version.exe)"
-            echo
+            echo ""
             echo "- **macOS:** [Saturn-$version-arm64.dmg]($base/Saturn-$version-arm64.dmg)"
             echo "- **macOS (Intel):** [Saturn-$version.dmg]($base/Saturn-$version.dmg)"
-            echo
+            echo ""
             echo "- **General Linux:** $(linux AppImage)"
             echo "- **Debian & Ubuntu:** $(linux deb)"
             echo "- **Fedora:** $(linux rpm)"
-            echo
+            echo ""
             gh release view "v$version" --repo "$GITHUB_REPOSITORY" --json body -q .body
           } > notes.md
           gh release edit "v$version" --repo "$GITHUB_REPOSITORY" --notes-file notes.md --draft=false --latest
