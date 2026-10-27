@@ -210,7 +210,15 @@ export class CodeModuleService {
       snap.languages.push(...(lc.languages ?? []).map((l) => ({
         ...l, moduleId: m.id, badge, icon, hasServer: served.has(l.id), features: served.has(l.id) ? enabled : [],
       })));
-      if (lc.debugger) snap.debuggers.push({ moduleId: m.id, label: lc.debugger.label, languages: lc.debugger.languages });
+      if (lc.debugger) {
+        snap.debuggers.push({
+          moduleId: m.id,
+          label: lc.debugger.label,
+          languages: lc.debugger.languages,
+          configurations: (lc.debugger.configurations ?? []).map(({ id, label }) => ({ id, label })),
+          canAttach: !!lc.debugger.attach,
+        });
+      }
       snap.previews.push(...(lc.previews ?? []).map((p) => ({ ...p, moduleId: m.id })));
       snap.fileTemplates.push(...(lc.fileTemplates ?? []).map((t) => ({ ...t, moduleId: m.id })));
       if (lc.newProject) {

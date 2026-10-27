@@ -1,16 +1,23 @@
 import { computed, signal } from '@preact/signals';
 import type { SaturnApi } from '@shared/api';
-import type { DebugFrame, DebugState } from '@shared/types';
+import type { Breakpoint, DebugFrame, DebugState } from '@shared/types';
 
 /** How many console entries the Debug panel keeps. */
 const MAX_OUTPUT = 2000;
 
-/** One editor window's debug session as the renderer sees it, plus the project's breakpoints. */
+/**
+ * One editor window's debug session as the renderer sees it, plus the project's breakpoints, its
+ * watch expressions and which launch configuration is picked.
+ */
 export class DebugController {
-  readonly state = signal<DebugState>({ state: 'idle', frames: [], scopes: [] });
+  readonly state = signal<DebugState>({ state: 'idle', frames: [], scopes: [], threads: [], watches: [] });
   readonly output = signal<{ text: string; category: string }[]>([]);
-  /** File path → 1-based breakpoint lines. */
-  readonly breakpoints = signal<Record<string, number[]>>({});
+  /** File path → breakpoints. */
+  readonly breakpoints = signal<Record<string, Breakpoint[]>>({});
+  /** Watch expressions (kept while Saturn runs; the values come back in `state.watches`). */
+  readonly watches = signal<string[]>([]);
+  /** The launch configuration Start Debugging uses: a configuration id, or null for the default. */
+  readonly configuration = signal<string | null>(null);
   /** The selected frame of the paused program (where the editor highlights), or null. */
   readonly frame = computed<DebugFrame | null>(() => {
     const s = this.state.value;
@@ -42,16 +49,23 @@ export class DebugController {
     this.output.value = [];
   }
 
-  setBreakpoints(path: string, lines: number[]): void {
+  setBreakpoints(path: string, list: Breakpoint[]): void {
     const next = { ...this.breakpoints.value };
-    if (lines.length) next[path] = lines;
+    if (list.length) next[path] = list;
     else delete next[path];
     this.breakpoints.value = next;
-    void this.api.debug.setBreakpoints(path, lines);
+    void this.api.debug.setBreakpoints(path, list);
   }
 
-  async start(path: string, languageId: string): Promise<void> {
+  setWatches(expressions: string[]): void {
+    this.watches.value = expressions;
+    void this.api.debug.setWatches(expressions);
+  }
+
+  /** Debugs a file with the picked configuration, or attaches to a process. */
+  async start(path: string, languageId: string, processId?: number): Promise<void> {
     this.clearOutput();
-    await this.api.debug.start({ path, languageId });
+    await this.api.debug.setWatches(this.watches.value);
+    await this.api.debug.start({ path, languageId, ...(processId === undefined ? { configuration: this.configuration.value ?? undefined } : { processId }) });
   }
 }

@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 /** Everything Saturn itself keeps in app-data (Chromium's own files there are left alone). Reset Saturn deletes these. */
 export const SATURN_DATA = [
   'settings.json', 'recent-projects.json', 'modules.json', 'module-settings.json',
-  'languages', 'extensions', 'themes', 'module-storage', 'layouts', 'run', 'breakpoints.json',
+  'languages', 'extensions', 'themes', 'module-storage', 'layouts', 'run', 'breakpoints.json', 'language-choices.json',
 ];
 
 /** Locations inside Saturn's app-data folder, not project folders. */

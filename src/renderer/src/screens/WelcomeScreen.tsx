@@ -14,22 +14,29 @@ type LocalPage = Page;
 
 
 /**
- * A recent project. Click opens it; right-click offers Open, Remove from list and Delete, each of the
- * last two confirmed in a row under the project. A missing folder offers removal.
+ * A recent project. Click opens it; right-click offers Open, Change language (its main language, shown
+ * as its icon), Remove from list and Delete, the last two confirmed in a row under the project. A
+ * missing folder offers removal.
  */
-function ProjectRow({ project, badges, onOpen, onRemove, onDelete }: {
+function ProjectRow({ project, badges, languages, onOpen, onRemove, onDelete, onLanguage }: {
   project: RecentProject;
   badges: ModuleLook[];
+  languages: { id: string; name: string }[];
   onOpen: () => void;
   onRemove: () => void;
   onDelete: () => Promise<void>;
+  onLanguage: (languageId: string) => void;
 }) {
   const [confirming, setConfirming] = useState<'remove' | 'delete' | null>(null);
-  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  // "actions" is the right-click menu; "language" is the list Change language… opens in its place.
+  const [menu, setMenu] = useState<{ x: number; y: number; mode: 'actions' | 'language' } | null>(null);
+  const menuAt = menu;
+  const setMenuAt = (at: { x: number; y: number } | null) => setMenu(at && { ...at, mode: 'actions' });
   const [problem, setProblem] = useState<string | null>(null);
   const pick = (id: string) => {
     setProblem(null);
     if (id === 'open') onOpen();
+    if (id === 'language' && menu) setMenu({ ...menu, mode: 'language' });
     if (id === 'remove' || id === 'delete') setConfirming(id);
   };
   const remove = () => {
@@ -57,11 +64,23 @@ function ProjectRow({ project, badges, onOpen, onRemove, onDelete }: {
         {/* The project's language icons, pinned to the right. */}
         <LanguageBadges badges={badges} />
       </div>
-      {menuAt && (
+      {menuAt?.mode === 'language' && (
+        <ContextMenu
+          at={menuAt}
+          items={[
+            { group: 'Project language' },
+            ...languages.map((l) => ({ id: l.id, label: l.name, hint: project.languageIds[0] === l.id ? 'current' : undefined, testId: `project-language-${l.id}` })),
+          ]}
+          onPick={onLanguage}
+          onClose={() => setMenu(null)}
+        />
+      )}
+      {menuAt?.mode === 'actions' && (
         <ContextMenu
           at={menuAt}
           items={[
             ...(project.missing ? [] : [{ id: 'open', label: 'Open', testId: 'project-menu-open' }]),
+            ...(project.missing || languages.length === 0 ? [] : [{ id: 'language', label: 'Change language…', testId: 'project-menu-language' }]),
             { id: 'remove', label: 'Remove from list…', testId: 'project-menu-remove' },
             ...(project.missing ? [] : [{ separator: true } as const, { id: 'delete', label: 'Delete…', testId: 'project-menu-delete' }]),
           ]}
@@ -194,6 +213,8 @@ export function WelcomeScreen() {
               badges={badgesFor(p)}
               onOpen={() => void open(p)}
               onRemove={() => void window.saturn.projects.removeRecent(p.path).then(load)}
+              languages={modules.languages}
+              onLanguage={(languageId) => void window.saturn.projects.setLanguage(p.path, languageId).then(load)}
               onDelete={async () => {
                 await window.saturn.projects.deleteProject(p.path);
                 load();

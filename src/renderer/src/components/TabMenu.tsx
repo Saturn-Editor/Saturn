@@ -15,13 +15,15 @@ interface TabMenuProps<T extends string> {
   onSelect: (id: T) => void;
   onClose?: (id: T) => void;
   trailing?: ComponentChild;
+  /** Makes tabs draggable, carrying their id under this drag data type (e.g. to another editor of a split). */
+  dragType?: string;
 }
 
 /**
  * A row of tabs (editor files, terminals, Marketplace's Available/Installed). Each tab is as wide as
  * its label; the row scrolls sideways when they don't fit.
  */
-export function TabMenu<T extends string>({ tabs, active, onSelect, onClose, trailing }: TabMenuProps<T>) {
+export function TabMenu<T extends string>({ tabs, active, onSelect, onClose, trailing, dragType }: TabMenuProps<T>) {
   return (
     <div class="flex items-stretch bg-panel border-b border-divider shrink-0">
       <div class="flex flex-1 items-stretch min-w-0 overflow-x-auto" role="tablist">
@@ -33,6 +35,8 @@ export function TabMenu<T extends string>({ tabs, active, onSelect, onClose, tra
               role="tab"
               aria-selected={isActive}
               onClick={() => onSelect(tab.id)}
+              draggable={!!dragType}
+              onDragStart={dragType ? (e) => e.dataTransfer?.setData(dragType, tab.id) : undefined}
               onAuxClick={(e) => e.button === 1 && tab.closable && onClose?.(tab.id)}
               // Closable tabs keep less space on the right because the close button pads it.
               class={`group flex shrink-0 items-center gap-1.5 pl-3 ${tab.closable ? 'pr-1.5' : 'pr-3'} h-8 border-r border-divider cursor-pointer whitespace-nowrap ${

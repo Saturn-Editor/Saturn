@@ -8,7 +8,7 @@ import type { ViewMode } from '@renderer/preview/PreviewRegistry';
 import { createEditorState, cursorLabel, languageCompartment, runEditorCommand } from '@renderer/editor/codemirrorSetup';
 import { shortcutFor } from '@renderer/commands/keymap';
 import type { MenuEntry } from '@renderer/components';
-import { breakpoints, setExecutionLine } from '@renderer/editor/breakpoints';
+import { breakpointLines, breakpoints, editBreakpointAt, setBreakpointLines, setExecutionLine, toggleBreakpoint } from '@renderer/editor/breakpoints';
 import { refreshHighlighting } from '@renderer/modules/textmate';
 import type { InfoDoc } from '@renderer/editor/EditorDocuments';
 import { DiffView } from './DiffView';
@@ -38,10 +38,12 @@ function NoticeCount() {
 }
 
 /**
- * The "…" at the right of the file tabs: Close All, Close Others and Split Right / Close Split. Files with unsaved changes stay
- * open (closing a tab doesn't ask to save), and the status bar says how many were kept.
+ * The "…" at the right of each editor's tabs: Close All, Close Others, Split Right, Split Down and
+ * Close Split. Files with unsaved changes stay open (closing a tab doesn't ask to save), and the status
+ * bar says how many were kept. Every editor of a split runs the same way, so Split Down turns a
+ * side-by-side split into a stacked one.
  */
-function TabsMenu() {
+function TabsMenu({ group }: { group: number }) {
   const ws = useWorkspace();
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLSpanElement>(null);
@@ -65,10 +67,20 @@ function TabsMenu() {
           items={[
             { id: 'all', label: 'Close All', testId: 'tabs-close-all' },
             { id: 'others', label: 'Close Others', testId: 'tabs-close-others' },
-            { id: 'split', label: ws.documents.split.value ? 'Close Split' : 'Split Right', testId: 'tabs-split' },
+            { separator: true },
+            ...(ws.documents.groupPaths.value.length < 4 ? [
+              { id: 'right', label: 'Split Right', testId: 'tabs-split' },
+              { id: 'down', label: 'Split Down', testId: 'tabs-split-down' },
+            ] : []),
+            ...(ws.documents.split.value ? [{ id: 'close-split', label: 'Close This Split', testId: 'tabs-close-split' }] : []),
           ]}
           onPick={(id) => {
-            if (id === 'split') return ws.documents.toggleSplit();
+            if (id === 'right' || id === 'down') {
+              ws.documents.focus(group);
+              return ws.documents.splitEditor(id);
+            }
+            if (id === 'close-split') return ws.documents.closeGroup(group);
+            ws.documents.focus(group);
             const active = ws.documents.activePath.value;
             closeWhere(id === 'all' ? () => false : (p) => p === active);
           }}
@@ -156,12 +168,19 @@ function syncText(view: EditorView, text: string): void {
   view.dispatch({ changes: { from: start, to: current.length - end, insert: text.slice(start, text.length - end) } });
 }
 
+/** Drag data type for a file tab being dragged to another editor of a split. */
+const TAB_DRAG_TYPE = 'application/x-saturn-tab';
+
 /**
- * One side of the editor: file tabs plus one CodeMirror view whose state is swapped per open file.
- * With a split there are two; both list the same open files, and each shows its own.
+ * One editor: file tabs plus one CodeMirror view whose state is swapped per open file. A split has up
+ * to four; all list the same open files, and each shows its own. Dropping a dragged tab on an editor
+ * shows that file there.
  */
-function EditorPane({ group }: { group: 0 | 1 }) {
+function EditorPane({ group }: { group: number }) {
   const ws = useWorkspace();
+  // Groups renumber when a split closes, so handlers read the current number from here.
+  const groupRef = useRef(group);
+  groupRef.current = group;
   const { documents, debug } = ws;
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -169,6 +188,8 @@ function EditorPane({ group }: { group: 0 | 1 }) {
   const shownPath = useRef<string | null>(null);
   const [modes, setModes] = useState<Record<string, ViewMode>>({});
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  // Right-clicking the breakpoint column: add/remove, a condition, or a log message.
+  const [breakpointMenu, setBreakpointMenu] = useState<{ pos: number; at: { x: number; y: number } } | null>(null);
 
   const split = documents.split.value;
   const focused = documents.focused.value === group;
@@ -182,7 +203,7 @@ function EditorPane({ group }: { group: 0 | 1 }) {
     const recolour = () => refreshHighlighting(v);
     // Clicking or typing in this side makes it the focused one (whose file Save, Close Tab… act on).
     const onFocus = () => {
-      documents.focus(group);
+      documents.focus(groupRef.current);
       ws.activeView = v;
     };
     v.contentDOM.addEventListener('focus', onFocus);
@@ -220,10 +241,14 @@ function EditorPane({ group }: { group: 0 | 1 }) {
     const state = cached ?? createEditorState(activeDoc.text, {
       onChange: (text) => documents.setText(path, text),
       onCursor: (label) => (ws.cursor.value = label),
-    }, breakpoints(debug.breakpoints.value[path] ?? [], (lines) => debug.setBreakpoints(path, lines)));
+    }, breakpoints(
+      debug.breakpoints.value[path] ?? [],
+      (list) => debug.setBreakpoints(path, list),
+      (_view, pos, e) => setBreakpointMenu({ pos, at: { x: e.clientX, y: e.clientY } }),
+    ));
     v.setState(state);
-    // The file may have changed while another side or a rename edited it.
-    syncText(v, activeDoc.text);
+    // The file may have changed while another editor or a rename edited it.
+    syncText(v, documents.docs.value.find((d) => d.path === path)?.text ?? activeDoc.text);
     ws.cursor.value = cursorLabel(v.state);
     if (focused) v.focus();
     if (!cached) {
@@ -234,11 +259,22 @@ function EditorPane({ group }: { group: 0 | 1 }) {
     }
   }, [activeDoc?.path, documents.docs.value.length, modulesVersion]);
 
-  // Edits made elsewhere (the other side of a split, a rename) show here too.
+  // Edits made elsewhere (another editor of a split, a rename) show here too. The text is read when the
+  // effect runs, not from this render: typing on may already have moved past the render's copy.
   useEffect(() => {
     const v = view.current;
-    if (v && activeDoc && shownPath.current === activeDoc.path) syncText(v, activeDoc.text);
+    const latest = activeDoc && documents.docs.value.find((d) => d.path === activeDoc.path);
+    if (v && latest && shownPath.current === latest.path) syncText(v, latest.text);
   }, [activeDoc?.text]);
+
+  // Breakpoints changed elsewhere (another editor showing the same file) show here too.
+  const savedBreakpoints = activeDoc ? debug.breakpoints.value[activeDoc.path] : undefined;
+  useEffect(() => {
+    const v = view.current;
+    if (!v || !activeDoc || shownPath.current !== activeDoc.path) return;
+    const wanted = savedBreakpoints ?? [];
+    if (breakpointLines(v.state).join() !== wanted.join()) v.dispatch({ effects: setBreakpointLines.of(wanted) });
+  }, [savedBreakpoints, activeDoc?.path]);
 
   // The paused program's line, while it's in this file.
   const frame = debug.frame.value;
@@ -280,12 +316,27 @@ function EditorPane({ group }: { group: 0 | 1 }) {
     </>
   );
 
+  const [dropTarget, setDropTarget] = useState(false);
+  const down = documents.splitDirection.value === 'down';
+
   return (
     <div
-      class={`flex-1 flex flex-col min-w-0 min-h-0 ${group === 1 ? 'border-l border-divider' : ''}`}
+      class={`relative flex-1 flex flex-col min-w-0 min-h-0 ${group > 0 ? (down ? 'border-t border-divider' : 'border-l border-divider') : ''}`}
       data-testid={`editor-pane-${group}`}
       onPointerDown={() => documents.focus(group)}
+      onDragOver={(e) => {
+        if (!split || !e.dataTransfer?.types.includes(TAB_DRAG_TYPE)) return;
+        e.preventDefault();
+        setDropTarget(true);
+      }}
+      onDragLeave={(e) => !(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node) && setDropTarget(false)}
+      onDrop={(e) => {
+        setDropTarget(false);
+        const path = e.dataTransfer?.getData(TAB_DRAG_TYPE);
+        if (path) documents.showIn(group, path);
+      }}
     >
+      {dropTarget && <div class="absolute inset-0 z-20 pointer-events-none bg-accent/10 outline outline-1 outline-accent" />}
       {tabs.length > 0 && (
         <TabMenu
           tabs={tabs}
@@ -295,7 +346,8 @@ function EditorPane({ group }: { group: 0 | 1 }) {
             documents.activePath.value = p;
           }}
           onClose={(p) => documents.close(p)}
-          trailing={<>{modeButtons}{(group === 1 || !split) && <TabsMenu />}</>}
+          dragType={split ? TAB_DRAG_TYPE : undefined}
+          trailing={<>{modeButtons}<TabsMenu group={group} /></>}
         />
       )}
       <div class="relative flex-1 min-h-0 flex">
@@ -315,6 +367,27 @@ function EditorPane({ group }: { group: 0 | 1 }) {
           <div ref={host} class="absolute inset-0" data-testid={group === 0 ? 'code-editor' : 'code-editor-2'} />
         </div>
         {menuAt && view.current && activeDoc && <EditorContextMenu view={view.current} path={activeDoc.path} at={menuAt} onClose={() => setMenuAt(null)} />}
+        {breakpointMenu && view.current && (() => {
+          const v = view.current;
+          const line = v.state.doc.lineAt(breakpointMenu.pos).number;
+          const has = breakpointLines(v.state).some((b) => b.line === line);
+          return (
+            <ContextMenu
+              at={breakpointMenu.at}
+              class="w-56"
+              items={[
+                { id: 'toggle', label: has ? 'Remove Breakpoint' : 'Add Breakpoint', testId: 'breakpoint-toggle' },
+                { id: 'condition', label: has ? 'Edit Condition…' : 'Add Conditional Breakpoint…', testId: 'breakpoint-condition' },
+                { id: 'log', label: has ? 'Edit Log Message…' : 'Add Logpoint…', testId: 'breakpoint-log' },
+              ]}
+              onPick={(id) => {
+                if (id === 'toggle') toggleBreakpoint(v, breakpointMenu.pos);
+                else editBreakpointAt(v, breakpointMenu.pos, id as 'condition' | 'log');
+              }}
+              onClose={() => setBreakpointMenu(null)}
+            />
+          );
+        })()}
         {provider && activeDoc && mode !== 'code' && (
           <div class={`flex-1 min-w-0 ${mode === 'split' ? 'border-l border-divider' : ''}`}>
             <PreviewPane provider={provider} text={activeDoc.text} path={activeDoc.path} projectPath={ws.projectPath} />
@@ -332,11 +405,11 @@ function EditorPane({ group }: { group: 0 | 1 }) {
 /** The editor: one pane, or two side by side after Split Right. */
 export function EditorArea() {
   const ws = useWorkspace();
+  const groups = ws.documents.groupPaths.value.length;
   return (
-    <div class="relative flex-1 flex min-w-0 min-h-0 bg-editor">
+    <div class={`relative flex-1 flex min-w-0 min-h-0 bg-editor ${ws.documents.splitDirection.value === 'down' ? 'flex-col' : ''}`}>
       <NoticeCount />
-      <EditorPane group={0} />
-      {ws.documents.split.value && <EditorPane group={1} />}
+      {Array.from({ length: groups }, (_, i) => <EditorPane key={i} group={i} />)}
     </div>
   );
 }

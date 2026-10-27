@@ -71,6 +71,9 @@ const saturnTheme = EditorView.theme({
   '.cm-saturn-rename input': { width: '240px', padding: '2px 6px', outline: 'none' },
   '.cm-saturn-breakpoints .cm-gutterElement': { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '14px', cursor: 'pointer' },
   '.cm-saturn-breakpoint': { width: '9px', height: '9px', borderRadius: '50%', backgroundColor: 'var(--color-red-500)' },
+  // Conditional: a bar across the dot. Logpoint: a diamond (it logs instead of stopping).
+  '.cm-saturn-conditional': { backgroundImage: 'linear-gradient(transparent 40%, var(--saturn-editor) 40%, var(--saturn-editor) 60%, transparent 60%)' },
+  '.cm-saturn-logpoint': { borderRadius: '0', transform: 'rotate(45deg) scale(0.85)' },
   '.cm-lineNumbers .cm-gutterElement': { cursor: 'pointer' },
   '.cm-saturn-execution': { backgroundColor: 'color-mix(in srgb, var(--saturn-accent) 22%, transparent)' },
   '.cm-saturn-conflict-ours': { backgroundColor: 'color-mix(in srgb, var(--color-green-500) 14%, transparent)' },
@@ -135,7 +138,7 @@ export function createEditorState(text: string, callbacks: EditorCallbacks, befo
     extensions: [
       before,
       // Clicking a line number adds or removes a breakpoint there.
-      lineNumbers({ domEventHandlers: { mousedown: (view, line) => toggleBreakpoint(view, line.from) } }),
+      lineNumbers({ domEventHandlers: { mousedown: (view, line, e) => (e as MouseEvent).button === 0 && toggleBreakpoint(view, line.from) } }),
       highlightActiveLineGutter(),
       highlightActiveLine(),
       drawSelection(),

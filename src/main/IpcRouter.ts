@@ -5,7 +5,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainEvent, type Ipc
 import { channel } from '@shared/api';
 import type { MarketplaceKind } from '@shared/marketplace';
 import { MANIFEST_FILES, SATURN_API_VERSION, type CompletionRequest, type DocumentRequest, type SettingValue, type TreeItem } from '@shared/modules';
-import type { AppFolder, AppInfo, AppSettings, LayoutState, NewProjectRequest, RunEntry, ThemeMode } from '@shared/types';
+import type { AppFolder, AppInfo, AppSettings, Breakpoint, LayoutState, NewProjectRequest, RunEntry, ThemeMode } from '@shared/types';
 import type { AppPaths } from './Helpers/AppPaths';
 import type { ExtensionHostService } from './Services/ExtensionHostService';
 import { FileService } from './Services/FileService';
@@ -17,6 +17,7 @@ import type { UpdateService } from './Services/UpdateService';
 import type { DebugService } from './Services/DebugService';
 import type { AskpassService } from './Services/AskpassService';
 import type { TrashService } from './Services/TrashService';
+import type { LanguageChoiceStore } from './Store/LanguageChoiceStore';
 import type { CodeModuleService } from './Services/CodeModuleService';
 import type { ProjectCreator } from './Services/ProjectCreator';
 import type { TerminalService } from './Services/TerminalService';
@@ -46,6 +47,7 @@ export interface SaturnServices {
   debug: DebugService;
   askpass: AskpassService;
   trash: TrashService;
+  languageChoices: LanguageChoiceStore;
   /** Wipes Saturn's data and starts over as on a first launch (Settings → Reset Saturn, after confirming). */
   reset: () => Promise<void>;
 }
@@ -81,8 +83,11 @@ export class IpcRouter {
     const { debug } = this.services;
     this.handle('debug', 'state', (e) => debug.state(this.projectOf(e)));
     this.handle('debug', 'breakpoints', (e) => debug.breakpointsFor(this.projectOf(e)));
-    this.handle('debug', 'setBreakpoints', (e, path: string, lines: number[]) => debug.setBreakpoints(this.projectOf(e), path, lines));
-    this.handle('debug', 'start', (e, req: { path: string; languageId: string }) => debug.start(this.projectOf(e), req));
+    this.handle('debug', 'setBreakpoints', (e, path: string, list: Breakpoint[]) => debug.setBreakpoints(this.projectOf(e), path, list));
+    this.handle('debug', 'start', (e, req: { path: string; languageId: string; configuration?: string; processId?: number }) => debug.start(this.projectOf(e), req));
+    this.handle('debug', 'setWatches', (e, expressions: string[]) => debug.setWatches(this.projectOf(e), expressions));
+    this.handle('debug', 'selectThread', (e, threadId: number) => debug.selectThread(this.projectOf(e), threadId));
+    this.handle('debug', 'processes', () => debug.processes());
     this.handle('debug', 'stop', (e) => debug.stop(this.projectOf(e)));
     for (const action of ['continue', 'next', 'stepIn', 'stepOut', 'pause'] as const) {
       this.handle('debug', action, (e) => debug.control(this.projectOf(e), action));
@@ -297,6 +302,12 @@ export class IpcRouter {
     this.handle('languages', 'complete', (e, req: CompletionRequest) => languageServers.complete(this.projectOf(e), req));
     this.handle('languages', 'hover', (e, req: CompletionRequest) => languageServers.hover(this.projectOf(e), req));
     this.handle('languages', 'definition', (e, req: CompletionRequest) => languageServers.definition(this.projectOf(e), req));
+    // Languages picked for single files (status bar), per project; the window rebuilds its editors on change.
+    this.handle('languages', 'fileChoices', (e) => this.services.languageChoices.forProject(this.projectOf(e)));
+    this.handle('languages', 'setFileLanguage', async (e, path: string, languageId: string | null) => {
+      const choices = await this.services.languageChoices.set(this.projectOf(e), path, languageId);
+      this.send(e.sender, 'languages', 'choicesChanged', choices);
+    });
     this.handle('languages', 'symbols', (e, req: DocumentRequest) => languageServers.symbols(this.projectOf(e), req));
     this.handle('languages', 'references', (e, req: CompletionRequest) => languageServers.references(this.projectOf(e), req));
     this.handle('languages', 'rename', (e, req: CompletionRequest & { newName: string }) => languageServers.rename(this.projectOf(e), req));
@@ -370,6 +381,7 @@ export class IpcRouter {
 
     this.handle('projects', 'recent', () => recent.list());
     this.handle('projects', 'removeRecent', (_e, path: string) => recent.remove(path));
+    this.handle('projects', 'setLanguage', (_e, path: string, languageId: string) => recent.setLanguage(path, languageId));
     /** Moves a recent project's folder to the Trash and forgets it (the Welcome screen confirms first). */
     this.handle('projects', 'deleteProject', async (_e, path: string) => {
       if (!(await recent.list()).some((p) => p.path === path)) throw new Error('Only recent projects can be deleted here');
