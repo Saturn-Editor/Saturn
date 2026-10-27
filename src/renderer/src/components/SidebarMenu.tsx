@@ -4,6 +4,8 @@ export interface SidebarItem<T extends string> {
   id: T;
   label: string;
   icon?: ComponentChild;
+  /** Draw a divider above this item, e.g. between Saturn's own sections and ones added by languages and extensions. */
+  dividerBefore?: boolean;
 }
 
 interface SidebarMenuProps<T extends string> {
@@ -20,7 +22,7 @@ interface SidebarMenuProps<T extends string> {
 
 function SidebarMenuItem<T extends string>({ item, selected, onSelect }: { item: SidebarItem<T>; selected: boolean; onSelect: (id: T) => void }) {
   return (
-    <li>
+    <li class={item.dividerBefore ? 'mt-1 pt-1 border-t border-divider' : undefined}>
       <button
         type="button"
         aria-current={selected ? 'page' : undefined}

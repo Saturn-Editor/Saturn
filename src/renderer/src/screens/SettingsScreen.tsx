@@ -3,8 +3,8 @@ import { bindingFor, formatBinding, KEYMAP_ACTIONS, KEYMAPS, type KeymapId } fro
 import { MARKETPLACE_INDEX_URL } from '@shared/marketplace';
 import { isMac } from '@renderer/commands/keymap';
 import type { ContributionSnapshot, SettingValue, SettingValues } from '@shared/modules';
-import { TEXT_SIZES, type AppSettings, type ThemeSummary } from '@shared/types';
-import { Badge, Button, FieldInput, FormField, Heading, RadioList, Select, SidebarMenu, TextInput, Toggle } from '@renderer/components';
+import { FILE_ENCODINGS, TEXT_SIZES, type AppSettings, type FileEncoding, type ThemeSummary } from '@shared/types';
+import { Button, FieldInput, ModuleIcon, FormField, Heading, RadioList, SegmentedControl, Select, SidebarMenu, TabMenu, TextInput, Toggle } from '@renderer/components';
 import { ModeToggle } from '@renderer/theme/ModeToggle';
 
 /** Built-in sections, then one per module that declares settings ("module:<id>"). */
@@ -68,7 +68,21 @@ function useAppSettings(): AppSettings | null {
   return settings;
 }
 
+type EditorTab = 'behaviour' | 'smartcode';
+
+/** Settings → Editor, with two tabs: Behaviour (indentation, encoding, reset) and SmartCode (completion). */
 function EditorSection() {
+  const [tab, setTab] = useState<EditorTab>('behaviour');
+  return (
+    <div class="-m-4 flex flex-col">
+      <TabMenu<EditorTab> tabs={[{ id: 'behaviour', label: 'Behaviour' }, { id: 'smartcode', label: 'SmartCode' }]} active={tab} onSelect={setTab} />
+      <div class="p-4">{tab === 'behaviour' ? <BehaviourSection /> : <SmartCodeSection />}</div>
+    </div>
+  );
+}
+
+/** Code completion from the language's server. */
+function SmartCodeSection() {
   const settings = useAppSettings();
   if (!settings) return null;
   return (
@@ -82,6 +96,81 @@ function EditorSection() {
           onChange={(on) => void window.saturn.settings.update({ completion: on })}
         />
       </div>
+      <Heading class="mt-5">Error detection</Heading>
+      <div class="flex items-center gap-3">
+        <span class="flex-1">Underline errors and warnings from the language, and count them in the status bar</span>
+        <Toggle
+          on={settings.diagnostics}
+          label={settings.diagnostics ? 'Turn off error detection' : 'Turn on error detection'}
+          onChange={(on) => void window.saturn.settings.update({ diagnostics: on })}
+        />
+      </div>
+    </section>
+  );
+}
+
+/** Editor → Behaviour: indentation, file encoding, and Reset Saturn as the last setting. */
+function BehaviourSection() {
+  const settings = useAppSettings();
+  if (!settings) return null;
+  const update = (change: Partial<AppSettings>) => void window.saturn.settings.update(change);
+  return (
+    <section>
+      <Heading>Indentation</Heading>
+      <div class="flex items-center gap-3 mb-3">
+        <span class="flex-1">Auto-indent new lines</span>
+        <Toggle on={settings.autoIndent} label={settings.autoIndent ? 'Turn off auto-indent' : 'Turn on auto-indent'} onChange={(on) => update({ autoIndent: on })} />
+      </div>
+      <div class="flex items-center gap-3 mb-3">
+        <span class="flex-1">Indent with</span>
+        <div class="w-48">
+          <SegmentedControl
+            label="Indent with"
+            value={settings.indentWith}
+            onChange={(indentWith) => update({ indentWith })}
+            options={[{ id: 'spaces', label: 'Spaces' }, { id: 'tab', label: 'Tab' }]}
+          />
+        </div>
+      </div>
+      {settings.indentWith === 'spaces' && (
+        <div class="flex items-center gap-3 mb-5">
+          <span class="flex-1">Spaces per indent</span>
+          <Select
+            value={String(settings.indentSize)}
+            options={[{ value: '2', label: '2' }, { value: '4', label: '4' }, { value: '8', label: '8' }]}
+            onChange={(v) => update({ indentSize: Number(v) as 2 | 4 | 8 })}
+          />
+        </div>
+      )}
+      <Heading class="mt-5">Auto-save</Heading>
+      <div class="mb-1">
+        <SegmentedControl
+          label="Auto-save"
+          value={settings.autoSave}
+          onChange={(autoSave) => update({ autoSave })}
+          options={[
+            { id: 'typing', label: 'While typing' },
+            { id: 'idle', label: 'When I stop or close' },
+            { id: 'off', label: 'Off' },
+          ]}
+        />
+      </div>
+      <p class="mt-1 mb-0 text-muted text-[11px]">
+        {settings.autoSave === 'typing' && 'Saves at most every 2 seconds while you type.'}
+        {settings.autoSave === 'idle' && 'Saves a second after you stop typing, when you close a file, and when you leave the window.'}
+        {settings.autoSave === 'off' && 'Files save only when you choose Save.'}
+      </p>
+      <Heading class="mt-5">Encoding</Heading>
+      <div class="flex items-center gap-3">
+        <span class="flex-1">Read and save files as</span>
+        <Select<FileEncoding> value={settings.encoding} options={FILE_ENCODINGS.map((e) => ({ value: e.id, label: e.id === 'utf-8' ? `${e.label} (default)` : e.label }))} onChange={(encoding) => update({ encoding })} />
+      </div>
+      <Heading class="mt-5">Reset Saturn</Heading>
+      <p class="mt-0 mb-2.5 text-muted">
+        Removes all settings, installed languages, extensions and themes, and the recent projects list, then restarts
+        Saturn as new. Your project folders on disk are not touched. You'll be asked to confirm.
+      </p>
+      <Button testId="reset-saturn" onClick={() => void window.saturn.app.reset()}>Reset Saturn…</Button>
     </section>
   );
 }
@@ -178,29 +267,39 @@ function ModuleSection({ tab }: { tab: ModuleTab }) {
 
 const MODULE_PREFIX = 'module:';
 
-export function SettingsScreen() {
-  const [section, setSection] = useState<Section>('appearance');
+/**
+ * Settings: a sidebar of sections in its own window, or a row of tabs when `embedded` in the Welcome
+ * window (which already has a sidebar).
+ */
+export function SettingsScreen({ embedded = false }: { embedded?: boolean }) {
+  // A Settings window can be opened on a section, e.g. a module's tab from a notification.
+  const requested = embedded ? null : window.saturn.window.section;
+  const [section, setSection] = useState<Section>(requested && /^(appearance|editor|keymap|marketplace|module:.+)$/.test(requested) ? (requested as Section) : 'appearance');
   const [moduleTabs, setModuleTabs] = useState<ModuleTab[]>([]);
   useEffect(() => {
     void window.saturn.modules.snapshot().then((s) => setModuleTabs(s.settings));
     return window.saturn.modules.onChanged((s) => setModuleTabs(s.settings));
   }, []);
   const moduleTab = moduleTabs.find((t) => section === `${MODULE_PREFIX}${t.moduleId}`);
+  const sections = [
+    { id: 'appearance' as Section, label: 'Appearance' },
+    { id: 'editor' as Section, label: 'Editor' },
+    { id: 'keymap' as Section, label: 'Keymap' },
+    { id: 'marketplace' as Section, label: 'Marketplace' },
+    // Tabs added by installed languages and extensions, below a divider.
+    ...moduleTabs.map((t, i) => ({
+      id: `${MODULE_PREFIX}${t.moduleId}` as Section,
+      label: t.moduleName,
+      icon: <ModuleIcon icon={t.icon} badge={t.badge} />,
+      dividerBefore: i === 0,
+    })),
+  ];
 
   return (
     <div class="flex flex-col h-full" data-testid="screen-settings">
+      {embedded && <TabMenu<Section> tabs={sections} active={section} onSelect={setSection} />}
       <div class="flex flex-1 min-h-0">
-        <SidebarMenu<Section>
-          items={[
-            { id: 'appearance', label: 'Appearance' },
-            { id: 'editor', label: 'Editor' },
-            { id: 'keymap', label: 'Keymap' },
-            { id: 'marketplace', label: 'Marketplace' },
-            ...moduleTabs.map((t) => ({ id: `${MODULE_PREFIX}${t.moduleId}` as Section, label: t.moduleName, icon: <Badge text={t.badge} /> })),
-          ]}
-          selected={section}
-          onSelect={setSection}
-        />
+        {!embedded && <SidebarMenu<Section> items={sections} selected={section} onSelect={setSection} />}
         <main class="flex-1 p-4 overflow-y-auto">
           {section === 'appearance' && <AppearanceSection />}
           {section === 'editor' && <EditorSection />}

@@ -1,29 +1,55 @@
-import type { JSX } from 'preact';
+// The SVGs live in resources/icons/ so they can be edited directly. Use stroke="currentColor"
+// (or fill) in them so icons follow the theme's text colours.
+import bell from '../../../../resources/icons/bell.svg?raw';
+import chevronDown from '../../../../resources/icons/chevron-down.svg?raw';
+import chevronRight from '../../../../resources/icons/chevron-right.svg?raw';
+import close from '../../../../resources/icons/close.svg?raw';
+import code from '../../../../resources/icons/code.svg?raw';
+import commit from '../../../../resources/icons/commit.svg?raw';
+import file from '../../../../resources/icons/file.svg?raw';
+import folder from '../../../../resources/icons/folder.svg?raw';
+import gear from '../../../../resources/icons/gear.svg?raw';
+import git from '../../../../resources/icons/git.svg?raw';
+import more from '../../../../resources/icons/more.svg?raw';
+import play from '../../../../resources/icons/play.svg?raw';
+import notices from '../../../../resources/icons/notices.svg?raw';
+import plus from '../../../../resources/icons/plus.svg?raw';
+import preview from '../../../../resources/icons/preview.svg?raw';
+import question from '../../../../resources/icons/question.svg?raw';
+import search from '../../../../resources/icons/search.svg?raw';
+import split from '../../../../resources/icons/split.svg?raw';
+import stop from '../../../../resources/icons/stop.svg?raw';
+import terminal from '../../../../resources/icons/terminal.svg?raw';
 
 type IconProps = { class?: string };
 
-function Svg({ class: cls = 'size-4', children }: IconProps & { children: JSX.Element | JSX.Element[] }) {
-  return (
-    <svg class={cls} viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="square" aria-hidden="true">
-      {children}
-    </svg>
+/** An icon component for one SVG file, sized by its `class` (size-4 by default). */
+function svgIcon(markup: string) {
+  // The SVG fills the span, so the span's size classes set the icon's size.
+  const filled = markup.replace('<svg', '<svg width="100%" height="100%" aria-hidden="true"');
+  return ({ class: cls = 'size-4' }: IconProps) => (
+    <span class={`inline-flex shrink-0 ${cls}`} dangerouslySetInnerHTML={{ __html: filled }} />
   );
 }
 
-export const FolderIcon = (p: IconProps) => <Svg {...p}><path d="M1.5 3.5h5l1.5 1.5h6.5v8h-13z" /></Svg>;
-export const TerminalIcon = (p: IconProps) => <Svg {...p}><path d="M1.5 2.5h13v11h-13z M4 6l2.5 2L4 10 M8 10.5h4" /></Svg>;
-export const CommitIcon = (p: IconProps) => <Svg {...p}><path d="M3 8.5l3 3 7-7" /></Svg>;
-export const GitIcon = (p: IconProps) => <Svg {...p}><path d="M5 2v12 M5 6c0 3 6 1 6 5 M11 11v3 M11 2v4" /></Svg>;
-export const PlayIcon = (p: IconProps) => <Svg {...p}><path d="M4.5 2.5l9 5.5-9 5.5z" fill="currentColor" /></Svg>;
-export const StopIcon = (p: IconProps) => <Svg {...p}><path d="M3.5 3.5h9v9h-9z" fill="currentColor" /></Svg>;
-export const GearIcon = (p: IconProps) => <Svg {...p}><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z M8 1v2 M8 13v2 M1 8h2 M13 8h2 M3 3l1.5 1.5 M11.5 11.5L13 13 M3 13l1.5-1.5 M11.5 4.5L13 3" /></Svg>;
-export const PlusIcon = (p: IconProps) => <Svg {...p}><path d="M8 3v10 M3 8h10" /></Svg>;
-export const MoreIcon = (p: IconProps) => <Svg {...p}><path d="M3 8h.5 M8 8h.5 M13 8h.5" stroke-width="2" /></Svg>;
-export const CloseIcon = (p: IconProps) => <Svg {...p}><path d="M4 4l8 8 M12 4l-8 8" /></Svg>;
-export const ChevronDownIcon = (p: IconProps) => <Svg {...p}><path d="M4 6l4 4 4-4" /></Svg>;
-export const ChevronRightIcon = (p: IconProps) => <Svg {...p}><path d="M6 4l4 4-4 4" /></Svg>;
-export const SearchIcon = (p: IconProps) => <Svg {...p}><path d="M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9z M10.5 10.5l3.5 3.5" /></Svg>;
-export const CodeIcon = (p: IconProps) => <Svg {...p}><path d="M5.5 4L2 8l3.5 4 M10.5 4L14 8l-3.5 4" /></Svg>;
-export const SplitIcon = (p: IconProps) => <Svg {...p}><path d="M1.5 2.5h13v11h-13z M8 2.5v11" /></Svg>;
-export const PreviewIcon = (p: IconProps) => <Svg {...p}><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z M8 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" /></Svg>;
-export const FileIcon = (p: IconProps) => <Svg {...p}><path d="M3.5 1.5h6l3 3v10h-9z M9.5 1.5v3h3" /></Svg>;
+export const BellIcon = svgIcon(bell);
+export const NoticesIcon = svgIcon(notices);
+export const FolderIcon = svgIcon(folder);
+export const TerminalIcon = svgIcon(terminal);
+export const CommitIcon = svgIcon(commit);
+export const GitIcon = svgIcon(git);
+export const PlayIcon = svgIcon(play);
+export const StopIcon = svgIcon(stop);
+export const GearIcon = svgIcon(gear);
+export const PlusIcon = svgIcon(plus);
+export const MoreIcon = svgIcon(more);
+export const CloseIcon = svgIcon(close);
+export const ChevronDownIcon = svgIcon(chevronDown);
+export const ChevronRightIcon = svgIcon(chevronRight);
+export const SearchIcon = svgIcon(search);
+export const CodeIcon = svgIcon(code);
+export const SplitIcon = svgIcon(split);
+export const PreviewIcon = svgIcon(preview);
+export const FileIcon = svgIcon(file);
+/** Shown for a module's panel or button that has no icon. */
+export const QuestionIcon = svgIcon(question);

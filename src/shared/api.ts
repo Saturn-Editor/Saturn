@@ -1,9 +1,9 @@
 import type {
-  AppFolder, AppInfo, AppSettings, DirEntry, FileReadResult, LayoutState, NewProjectRequest, RecentProject,
+  AppFolder, AppInfo, AppSettings, DirEntry, GitCommit, GitStatus, FileReadResult, LayoutState, NewProjectRequest, RecentProject,
   RunEntry, Theme, ThemeMode, ThemeSummary, Unsubscribe, WindowKind,
 } from './types';
 import type {
-  CompletionItem, CompletionRequest, ContributionSnapshot, Diagnostic, ModuleMessage, ModuleSummary, SettingValue, SettingValues,
+  AppNotification, CompletionItem, CompletionRequest, ContributionSnapshot, Diagnostic, ModuleMessage, ModuleSummary, SettingValue, SettingValues,
   SourceLocation, TreeItem,
 } from './modules';
 import type { MarketplaceIndex } from './marketplace';
@@ -13,6 +13,14 @@ export const CHANNEL_PREFIX = 'saturn:';
 /** Builds an IPC channel name, e.g. channel('themes', 'setActive') → 'saturn:themes.setActive'. */
 export function channel(area: string, name: string): string {
   return `${CHANNEL_PREFIX}${area}.${name}`;
+}
+
+/** Listing, installing from a folder and removing one kind of code module. */
+interface InstallableModules {
+  list(): Promise<ModuleSummary[]>;
+  /** Asks for a folder and installs what's in it; null if cancelled. */
+  installDialog(): Promise<ModuleSummary | null>;
+  uninstall(id: string): Promise<void>;
 }
 
 export interface SaturnApi {
@@ -27,32 +35,15 @@ export interface SaturnApi {
     onSaveAll(cb: () => void): Unsubscribe;
   };
   windows: {
-    openSettings(section?: 'appearance'): void;
+    /** Opens Settings, optionally on a section ("appearance", or a module's tab as "module:<id>"). */
+    openSettings(section?: string): void;
     openNewProject(): void;
-    openMarketplace(section?: 'themes' | 'languages'): void;
+    openMarketplace(section?: 'themes' | 'languages' | 'extensions'): void;
   };
-  modules: {
-    list(): Promise<ModuleSummary[]>;
-    /** Asks for a folder and installs the module in it; null if cancelled. */
-    installDialog(): Promise<ModuleSummary | null>;
-    uninstall(id: string): Promise<void>;
-    setEnabled(id: string, enabled: boolean): Promise<void>;
-    /** A module's contributed settings, with defaults filled in. */
-    settings(moduleId: string): Promise<SettingValues>;
-    setSetting(moduleId: string, id: string, value: SettingValue): Promise<void>;
-    onSettingsChanged(cb: (moduleId: string, values: SettingValues) => void): Unsubscribe;
-    snapshot(): Promise<ContributionSnapshot>;
-    onChanged(cb: (snapshot: ContributionSnapshot) => void): Unsubscribe;
+  /** Installed languages, and what they do in the editor (highlighting and language servers). */
+  languages: InstallableModules & {
     grammar(languageId: string): Promise<unknown | null>;
     grammarByScope(scopeName: string): Promise<unknown | null>;
-    runCommand(id: string): Promise<void>;
-    treeChildren(panelId: string, parentId: string | null): Promise<TreeItem[]>;
-    /** Runs one of a tree item's right-click actions in its module. */
-    treeAction(panelId: string, actionId: string, item: TreeItem): Promise<void>;
-    /** A module asked to reload its tree; `itemId` limits it to that item's children. */
-    onTreeRefresh(cb: (panelId: string, itemId?: string) => void): Unsubscribe;
-    renderPreview(id: string, text: string, path: string): Promise<string>;
-    templateFile(id: string, name: string, dir: string): Promise<{ fileName: string | null; content: string }>;
     complete(req: CompletionRequest): Promise<CompletionItem[]>;
     /** Hover text from the language server at a position, or null. */
     hover(req: CompletionRequest): Promise<string | null>;
@@ -63,15 +54,66 @@ export interface SaturnApi {
     closeDocument(req: { path: string; languageId: string }): Promise<void>;
     /** Diagnostics a language server published for a file (replacing earlier ones for it). */
     onDiagnostics(cb: (path: string, diagnostics: Diagnostic[]) => void): Unsubscribe;
+  };
+  /** Installed extensions: actions, scripts, panels, buttons and settings, but no languages. */
+  extensions: InstallableModules;
+  /** What languages and extensions share at runtime. */
+  modules: {
+    setEnabled(id: string, enabled: boolean): Promise<void>;
+    /** A module's contributed settings, with defaults filled in. */
+    settings(moduleId: string): Promise<SettingValues>;
+    setSetting(moduleId: string, id: string, value: SettingValue): Promise<void>;
+    onSettingsChanged(cb: (moduleId: string, values: SettingValues) => void): Unsubscribe;
+    snapshot(): Promise<ContributionSnapshot>;
+    onChanged(cb: (snapshot: ContributionSnapshot) => void): Unsubscribe;
+    runCommand(id: string): Promise<void>;
+    treeChildren(panelId: string, parentId: string | null): Promise<TreeItem[]>;
+    /** Runs one of a tree item's right-click actions in its module. */
+    treeAction(panelId: string, actionId: string, item: TreeItem): Promise<void>;
+    /** A module asked to reload its tree; `itemId` limits it to that item's children. */
+    onTreeRefresh(cb: (panelId: string, itemId?: string) => void): Unsubscribe;
+    renderPreview(id: string, text: string, path: string): Promise<string>;
+    templateFile(id: string, name: string, dir: string): Promise<{ fileName: string | null; content: string }>;
     onOpenFile(cb: (path: string, line?: number, column?: number) => void): Unsubscribe;
+    /** A module asked to run a command in a new Terminal tab (`saturn.terminal.run`). */
+    onRunInTerminal(cb: (name: string, command: string) => void): Unsubscribe;
     /** Messages from modules (and extension host problems) for the status bar. */
     onMessage(cb: (message: ModuleMessage) => void): Unsubscribe;
+  };
+  /** The bell menu next to Settings: notifications from modules and Saturn, newest first. */
+  notifications: {
+    list(): Promise<AppNotification[]>;
+    dismiss(id: string): Promise<void>;
+    clear(): Promise<void>;
+    markAllRead(): Promise<void>;
+    /** Runs a notification's action by its index (command, open Settings tab, or https link). */
+    act(id: string, index: number): Promise<void>;
+    onChanged(cb: (items: AppNotification[]) => void): Unsubscribe;
+  };
+  /** The editor window's project repository, via the system `git`. */
+  git: {
+    status(): Promise<GitStatus>;
+    log(): Promise<GitCommit[]>;
+    show(hash: string): Promise<{ message: string; files: { status: string; path: string }[] }>;
+    branches(): Promise<string[]>;
+    init(): Promise<void>;
+    stage(paths: string[]): Promise<void>;
+    unstage(paths: string[]): Promise<void>;
+    commit(message: string): Promise<void>;
+    checkout(branch: string): Promise<void>;
+    createBranch(name: string): Promise<void>;
+    push(): Promise<void>;
+    pull(): Promise<void>;
+    /** Saturn changed the repository (commit, stage, branch…); file changes come through `fs.onChanged`. */
+    onChanged(cb: () => void): Unsubscribe;
   };
   app: {
     /** Versions, OS and storage folders, for About → Diagnostics. */
     info(): Promise<AppInfo>;
     /** Opens one of the folders listed in `info()` in Finder / Explorer. */
     openFolder(id: AppFolder): Promise<void>;
+    /** Asks for confirmation, then wipes Saturn's data and restarts it as new; false if cancelled. */
+    reset(): Promise<boolean>;
   };
   settings: {
     get(): Promise<AppSettings>;
@@ -84,6 +126,7 @@ export interface SaturnApi {
     index(): Promise<MarketplaceIndex>;
     /** Downloads, verifies and installs an entry from the last fetched index. */
     installLanguage(id: string): Promise<void>;
+    installExtension(id: string): Promise<void>;
     installTheme(id: string): Promise<void>;
   };
   projects: {
@@ -93,6 +136,8 @@ export interface SaturnApi {
     removeRecent(path: string): Promise<void>;
     pickFolder(): Promise<string | null>;
     pickFile(): Promise<string | null>;
+    /** Clones a repository into a new folder inside `parentDir`, then opens it. */
+    clone(url: string, parentDir: string): Promise<void>;
     create(req: NewProjectRequest): Promise<void>;
     defaultParentDir(): Promise<string>;
   };

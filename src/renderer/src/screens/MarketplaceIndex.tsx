@@ -1,18 +1,19 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import type { MarketplaceIndex } from '@shared/marketplace';
-import type { ModuleSummary } from '@shared/modules';
+import type { ModuleKind, ModuleSummary } from '@shared/modules';
 import type { ThemeSummary } from '@shared/types';
 import { Button } from '@renderer/components';
 
-/** Installed languages, kept up to date. */
-export function useInstalledModules(): ModuleSummary[] {
+/** Installed languages or extensions, kept up to date. */
+export function useInstalledModules(kind: ModuleKind = 'language'): ModuleSummary[] {
   const [installed, setInstalled] = useState<ModuleSummary[]>([]);
   useEffect(() => {
-    const load = () => void window.saturn.modules.list().then(setInstalled);
+    const api = kind === 'language' ? window.saturn.languages : window.saturn.extensions;
+    const load = () => void api.list().then(setInstalled);
     load();
     return window.saturn.modules.onChanged(load);
-  }, []);
+  }, [kind]);
   return installed;
 }
 

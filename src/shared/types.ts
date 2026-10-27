@@ -16,6 +16,34 @@ export interface SyntaxRule {
   fontStyle?: string;
 }
 
+/** One changed file from `git status`: X (staged) and Y (working tree) letters, e.g. "M", "A", "?" for untracked. */
+export interface GitChange {
+  path: string;
+  index: string;
+  worktree: string;
+}
+
+export interface GitStatus {
+  /** False when the project isn't a Git repository. */
+  repo: boolean;
+  branch: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  changes: GitChange[];
+}
+
+export interface GitCommit {
+  hash: string;
+  short: string;
+  author: string;
+  /** ISO date. */
+  date: string;
+  subject: string;
+  /** Branch and tag names pointing at it, e.g. "HEAD -> main", "origin/main". */
+  refs: string[];
+}
+
 /** Version and environment details for About → Diagnostics. */
 export interface AppInfo {
   version: string;
@@ -31,19 +59,41 @@ export interface AppInfo {
 }
 
 /** Folders About can open: where Saturn is installed, and where it keeps settings, languages and themes. */
-export type AppFolder = 'install' | 'userData' | 'modules' | 'themes';
+export type AppFolder = 'install' | 'userData' | 'languages' | 'extensions' | 'themes';
 
 /** Settings the user edits in the Settings window (theme and mode have their own API). */
 export interface AppSettings {
   /** Language-server completion while typing. */
   completion: boolean;
+  /** Errors and warnings from language servers, underlined in the editor with gutter markers. */
+  diagnostics: boolean;
   /** Which set of keyboard shortcuts to use. */
   keymap: KeymapId;
   /** Interface and editor text size as a percentage (100 is the default); scales every window. */
   textSize: number;
+  /** How files are read and saved. */
+  encoding: FileEncoding;
+  /** "typing": every 2s while there are changes; "idle": once typing stops, and on closing a tab or leaving the window; "off". */
+  autoSave: 'typing' | 'idle' | 'off';
+  /** Enter keeps the current line's indentation (and the language's extra indent). */
+  autoIndent: boolean;
+  /** What Tab and auto-indent insert. */
+  indentWith: 'spaces' | 'tab';
+  /** Spaces per indent level when indenting with spaces. */
+  indentSize: 2 | 4 | 8;
   /** The marketplace index URL; the official one unless the user changed it. */
   marketplaceUrl: string;
 }
+
+export type FileEncoding = 'utf-8' | 'utf-16' | 'us-ascii' | 'iso-8859-1';
+
+/** Settings → Editor → Encoding choices, as shown. UTF-16 is little-endian with a byte-order mark. */
+export const FILE_ENCODINGS: { id: FileEncoding; label: string }[] = [
+  { id: 'utf-8', label: 'UTF-8' },
+  { id: 'utf-16', label: 'UTF-16' },
+  { id: 'us-ascii', label: 'US-ASCII' },
+  { id: 'iso-8859-1', label: 'ISO-8859-1' },
+];
 
 /** Choices for Appearance → Text size, as percentages. */
 export const TEXT_SIZES = [80, 90, 100, 110, 125, 150] as const;
@@ -71,6 +121,8 @@ export interface ThemeSummary {
   name: string;
   version: string | null;
   description: string;
+  /** Its icon.svg / icon.png as a saturn-icon:// URL, or null (built-in themes, or none shipped). */
+  icon: string | null;
   /** Which variants the theme has. */
   modes: ThemeMode[];
   builtIn: boolean;

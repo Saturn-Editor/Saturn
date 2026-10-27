@@ -1,4 +1,6 @@
+import { existsSync } from 'node:fs';
 import { cp, readdir, readFile, rm } from 'node:fs/promises';
+import { ICON_FILES, ICON_SCHEME } from '@shared/modules';
 import { join } from 'node:path';
 import {
   THEME_MODES, THEME_TOKENS, type Theme, type ThemeFile, type ThemeMode, type ThemeSummary, type ThemeVariant,
@@ -44,7 +46,7 @@ export class ThemeService {
   }
 
   async list(): Promise<ThemeSummary[]> {
-    return (await this.loadAll()).map(({ theme, builtIn }) => summary(theme, builtIn));
+    return (await this.loadAll()).map(({ theme, builtIn }) => summary(theme, builtIn, this.installedDir));
   }
 
   async active(): Promise<Theme> {
@@ -98,7 +100,7 @@ export class ThemeService {
     const target = join(this.installedDir, parsed.id);
     await rm(target, { recursive: true, force: true });
     await cp(fromDir, target, { recursive: true });
-    return summary(parsed, false);
+    return summary(parsed, false, this.installedDir);
   }
 
   /** Removes an installed theme; if it was active, Saturn falls back to the default theme. */
@@ -151,12 +153,16 @@ export class ThemeService {
   }
 }
 
-function summary(theme: ThemeFile, builtIn: boolean): ThemeSummary {
+/** `installedDir` is where installed themes live; built-in themes have no icon. */
+function summary(theme: ThemeFile, builtIn: boolean, installedDir: string): ThemeSummary {
+  const dir = join(installedDir, theme.id);
+  const hasIcon = !builtIn && ICON_FILES.some((f) => existsSync(join(dir, f)));
   return {
     id: theme.id,
     name: theme.name,
     version: theme.version ?? null,
     description: theme.description ?? '',
+    icon: hasIcon ? `${ICON_SCHEME}://theme/${theme.id}?v=${encodeURIComponent(theme.version ?? '')}` : null,
     modes: THEME_MODES.filter((m) => theme[m]),
     builtIn,
   };

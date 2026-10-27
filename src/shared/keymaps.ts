@@ -69,6 +69,10 @@ export const KEYMAP_ACTIONS: KeymapAction[] = [
     bindings: { os: { mac: 'Mod-l', other: 'Ctrl-g' }, intellij: { mac: 'Mod-l', other: 'Ctrl-g' }, visualstudio: 'Ctrl-g', vscode: 'Ctrl-g' },
   },
   {
+    id: 'editor.gotoDefinition', title: 'Go to Definition', scope: 'editor',
+    bindings: { os: 'F12', intellij: 'Mod-b', visualstudio: 'F12', vscode: 'F12' },
+  },
+  {
     id: 'editor.duplicateLine', title: 'Duplicate Line', scope: 'editor',
     bindings: { os: 'Shift-Alt-ArrowDown', intellij: 'Mod-d', visualstudio: 'Ctrl-d', vscode: 'Shift-Alt-ArrowDown' },
   },

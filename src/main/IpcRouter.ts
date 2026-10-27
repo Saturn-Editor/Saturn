@@ -1,16 +1,18 @@
-import { mkdir, stat } from 'node:fs/promises';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { channel } from '@shared/api';
 import { SATURN_API_VERSION, type CompletionRequest, type SettingValue, type TreeItem } from '@shared/modules';
 import type { AppFolder, AppInfo, AppSettings, LayoutState, NewProjectRequest, RunEntry, ThemeMode } from '@shared/types';
-import type { AppPaths } from './Helpers/AppPaths';
+import { RESET_MARKER, type AppPaths } from './Helpers/AppPaths';
 import type { ExtensionHostService } from './Services/ExtensionHostService';
 import { FileService } from './Services/FileService';
+import { GitService } from './Services/GitService';
 import type { LanguageServerService } from './Services/LanguageServerService';
 import type { MarketplaceService } from './Services/MarketplaceService';
-import type { ModuleService } from './Services/ModuleService';
+import type { NotificationService } from './Services/NotificationService';
+import type { CodeModuleService } from './Services/CodeModuleService';
 import type { ProjectCreator } from './Services/ProjectCreator';
 import type { TerminalService } from './Services/TerminalService';
 import type { ThemeService } from './Services/ThemeService';
@@ -28,12 +30,13 @@ export interface SaturnServices {
   layouts: LayoutStore;
   terminals: TerminalService;
   runs: RunConfigStore;
-  modules: ModuleService;
+  modules: CodeModuleService;
   host: ExtensionHostService;
   languageServers: LanguageServerService;
   marketplace: MarketplaceService;
   settings: SettingsStore;
   paths: AppPaths;
+  notifications: NotificationService;
 }
 
 type Handler = (event: IpcMainInvokeEvent, ...args: any[]) => unknown;
@@ -57,6 +60,48 @@ export class IpcRouter {
     this.registerMarketplace();
     this.registerSettings();
     this.registerApp();
+    this.registerGit();
+    this.registerNotifications();
+  }
+
+  private registerNotifications(): void {
+    const { notifications, host, windows } = this.services;
+    this.handle('notifications', 'list', () => notifications.list());
+    this.handle('notifications', 'dismiss', (_e, id: string) => notifications.dismiss(id));
+    this.handle('notifications', 'clear', () => notifications.clear());
+    this.handle('notifications', 'markAllRead', () => notifications.markAllRead());
+    // Runs one of a notification's actions; commands run in the sender's project.
+    this.handle('notifications', 'act', async (e, id: string, index: number) => {
+      const n = notifications.get(id);
+      const action = n?.actions[index];
+      if (!n || !action) return;
+      if (action.command) await host.runCommand(action.command, { projectPath: this.projectOf(e) });
+      else if (action.openSettings) windows.openSettings(this.senderWindow(e), `module:${n.moduleId}`);
+      else if (action.url?.startsWith('https://')) await shell.openExternal(action.url);
+    });
+  }
+
+  /** Git for the sender's project. Changes tell that window's Git views to refresh. */
+  private registerGit(): void {
+    const gitFor = (e: IpcMainInvokeEvent) => new GitService(this.projectOf(e));
+    const changing = (name: string, run: (git: GitService, ...args: any[]) => Promise<void>) => {
+      this.handle('git', name, async (e, ...args: unknown[]) => {
+        await run(gitFor(e), ...args);
+        this.send(e.sender, 'git', 'changed');
+      });
+    };
+    this.handle('git', 'status', (e) => gitFor(e).status());
+    this.handle('git', 'log', (e) => gitFor(e).log());
+    this.handle('git', 'show', (e, hash: string) => gitFor(e).show(hash));
+    this.handle('git', 'branches', (e) => gitFor(e).branches());
+    changing('init', (git) => git.init());
+    changing('stage', (git, paths: string[]) => git.stage(paths));
+    changing('unstage', (git, paths: string[]) => git.unstage(paths));
+    changing('commit', (git, message: string) => git.commit(message));
+    changing('checkout', (git, branch: string) => git.checkout(branch));
+    changing('createBranch', (git, name: string) => git.createBranch(name));
+    changing('push', (git) => git.push());
+    changing('pull', (git) => git.pull());
   }
 
   private registerApp(): void {
@@ -64,7 +109,8 @@ export class IpcRouter {
     const folders: Record<AppFolder, { label: string; path: string }> = {
       install: { label: 'Installed in', path: app.getAppPath() },
       userData: { label: 'Settings and data', path: paths.root },
-      modules: { label: 'Languages', path: paths.dir('modules') },
+      languages: { label: 'Languages', path: paths.dir('languages') },
+      extensions: { label: 'Extensions', path: paths.dir('extensions') },
       themes: { label: 'Themes', path: paths.dir('themes') },
     };
     const osName: Record<string, string> = { darwin: 'macOS', win32: 'Windows', linux: 'Linux' };
@@ -79,6 +125,23 @@ export class IpcRouter {
       locale: app.getLocale(),
       folders: Object.entries(folders).map(([id, f]) => ({ id: id as AppFolder, ...f })),
     }));
+    // Reset Saturn: after confirming, mark the data folder for wiping and relaunch. SaturnApp wipes it
+    // on startup, before anything has it open. Project folders on disk are never touched.
+    this.handle('app', 'reset', async (e) => {
+      const { response } = await dialog.showMessageBox(this.senderWindow(e), {
+        type: 'warning',
+        message: 'Reset Saturn?',
+        detail: 'This removes all settings, installed languages, extensions and themes, and the recent projects list, then restarts Saturn as new. Your project folders on disk are not touched.',
+        buttons: ['Reset and restart', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+      });
+      if (response !== 0) return false;
+      await writeFile(join(paths.root, RESET_MARKER), '');
+      app.relaunch();
+      app.exit(0);
+      return true;
+    });
     // Only the folders listed above can be opened, never an arbitrary path from the renderer.
     this.handle('app', 'openFolder', async (_e, id: AppFolder) => {
       const folder = folders[id];
@@ -104,7 +167,8 @@ export class IpcRouter {
   private registerMarketplace(): void {
     const { marketplace } = this.services;
     this.handle('marketplace', 'index', () => marketplace.fetchIndex());
-    this.handle('marketplace', 'installLanguage', (_e, id: string) => marketplace.installLanguage(id));
+    this.handle('marketplace', 'installLanguage', (_e, id: string) => marketplace.installModule('language', id));
+    this.handle('marketplace', 'installExtension', (_e, id: string) => marketplace.installModule('extension', id));
     this.handle('marketplace', 'installTheme', async (_e, id: string) => {
       await marketplace.installTheme(id);
       this.broadcast('themes', 'listChanged');
@@ -126,20 +190,32 @@ export class IpcRouter {
     const { modules, host, languageServers, windows } = this.services;
     const ctx = (e: IpcMainInvokeEvent) => ({ projectPath: this.projectOf(e) });
 
-    this.handle('modules', 'list', () => modules.summaries());
-    this.handle('modules', 'snapshot', () => modules.snapshot());
-    this.handle('modules', 'grammar', (_e, languageId: string) => modules.grammar(languageId));
-    this.handle('modules', 'grammarByScope', (_e, scopeName: string) => modules.grammarByScope(scopeName));
-    this.handle('modules', 'installDialog', async (e) => {
-      const result = await dialog.showOpenDialog(this.senderWindow(e), {
-        title: 'Install a language from a folder',
-        properties: ['openDirectory'],
+    // Installing, listing and removing, per kind: "languages" and "extensions".
+    for (const [area, kind] of [['languages', 'language'], ['extensions', 'extension']] as const) {
+      this.handle(area, 'list', () => modules.summaries(kind));
+      this.handle(area, 'installDialog', async (e) => {
+        const result = await dialog.showOpenDialog(this.senderWindow(e), {
+          title: `Install ${kind === 'language' ? 'a language' : 'an extension'} from a folder`,
+          properties: ['openDirectory'],
+        });
+        if (result.canceled || !result.filePaths[0]) return null;
+        const manifest = await modules.install(kind, result.filePaths[0]);
+        return (await modules.summaries(kind)).find((m) => m.id === manifest.id) ?? null;
       });
-      if (result.canceled || !result.filePaths[0]) return null;
-      const manifest = await modules.install(result.filePaths[0]);
-      return (await modules.summaries()).find((m) => m.id === manifest.id) ?? null;
+      this.handle(area, 'uninstall', (_e, id: string) => modules.uninstall(kind, id));
+    }
+    this.handle('languages', 'grammar', (_e, languageId: string) => modules.grammar(languageId));
+    this.handle('languages', 'grammarByScope', (_e, scopeName: string) => modules.grammarByScope(scopeName));
+    this.handle('languages', 'complete', (e, req: CompletionRequest) => languageServers.complete(this.projectOf(e), req));
+    this.handle('languages', 'hover', (e, req: CompletionRequest) => languageServers.hover(this.projectOf(e), req));
+    this.handle('languages', 'definition', (e, req: CompletionRequest) => languageServers.definition(this.projectOf(e), req));
+    this.handle('languages', 'syncDocument', async (e, req: { path: string; languageId: string; text: string }) => {
+      await languageServers.sync(this.projectOf(e), req);
     });
-    this.handle('modules', 'uninstall', (_e, id: string) => modules.uninstall(id));
+    this.handle('languages', 'closeDocument', (e, req: { path: string; languageId: string }) => languageServers.close(this.projectOf(e), req));
+
+    // What both kinds share at runtime: contributions, enabling, settings and calls into module code.
+    this.handle('modules', 'snapshot', () => modules.snapshot());
     this.handle('modules', 'setEnabled', (_e, id: string, enabled: boolean) => modules.setEnabled(id, enabled));
     this.handle('modules', 'settings', (_e, moduleId: string) => modules.settings(moduleId));
     this.handle('modules', 'setSetting', (_e, moduleId: string, id: string, value: SettingValue) => modules.setSetting(moduleId, id, value));
@@ -148,13 +224,6 @@ export class IpcRouter {
     this.handle('modules', 'treeAction', (e, panelId: string, actionId: string, item: TreeItem) => host.treeAction(panelId, actionId, item, ctx(e)));
     this.handle('modules', 'renderPreview', (e, id: string, text: string, path: string) => host.renderPreview(id, text, { ...ctx(e), path }));
     this.handle('modules', 'templateFile', (e, id: string, name: string, dir: string) => host.templateFile(id, { ...ctx(e), name, dir }));
-    this.handle('modules', 'complete', (e, req: CompletionRequest) => languageServers.complete(this.projectOf(e), req));
-    this.handle('modules', 'hover', (e, req: CompletionRequest) => languageServers.hover(this.projectOf(e), req));
-    this.handle('modules', 'definition', (e, req: CompletionRequest) => languageServers.definition(this.projectOf(e), req));
-    this.handle('modules', 'syncDocument', async (e, req: { path: string; languageId: string; text: string }) => {
-      await languageServers.sync(this.projectOf(e), req);
-    });
-    this.handle('modules', 'closeDocument', (e, req: { path: string; languageId: string }) => languageServers.close(this.projectOf(e), req));
 
     this.on('windows', 'openMarketplace', (e, section?: string) => windows.openMarketplace(this.senderWindow(e), section));
   }
@@ -235,6 +304,12 @@ export class IpcRouter {
       await openProject(path, req.languageId);
       sender.close();
     });
+    // Clone into a new folder in parentDir, then open it like any project.
+    this.handle('projects', 'clone', async (_e, url: string, parentDir: string) => {
+      if (!url.trim()) throw new Error('Enter a repository URL');
+      const path = await GitService.clone(url, parentDir);
+      await openProject(path);
+    });
     this.handle('projects', 'defaultParentDir', async () => {
       const dev = join(homedir(), 'development');
       return (await stat(dev).then((s) => s.isDirectory(), () => false)) ? dev : homedir();
@@ -279,7 +354,7 @@ export class IpcRouter {
     const existing = this.files.get(sender.id);
     if (existing) return existing.service;
     const projectPath = this.projectOf(event);
-    const service = new FileService(projectPath);
+    const service = new FileService(projectPath, async () => (await this.services.settings.app()).encoding);
     // One watcher per project window feeds both the explorer and modules (saturn.workspace.onDidChangeFiles).
     const stopWatching = service.watch((dir) => {
       this.send(sender, 'fs', 'changed', dir);

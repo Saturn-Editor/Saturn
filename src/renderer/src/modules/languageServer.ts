@@ -1,5 +1,5 @@
 import { autocompletion, snippet, type Completion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete';
-import { lintGutter, setDiagnostics, type Diagnostic as CmDiagnostic } from '@codemirror/lint';
+import { setDiagnostics, type Diagnostic as CmDiagnostic } from '@codemirror/lint';
 import { Facet, type EditorState, type Extension, type Text } from '@codemirror/state';
 import { EditorView, hoverTooltip, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 import type { CompletionItem, CompletionRequest, Diagnostic, SourceLocation, TextRange } from '@shared/modules';
@@ -38,9 +38,54 @@ function toCm(doc: Text, list: Diagnostic[]): CmDiagnostic[] {
   });
 }
 
+/** Settings → Editor → SmartCode → error detection. While off, diagnostics are kept but not shown. */
+let showDiagnostics = true;
+
+export function setShowDiagnostics(on: boolean): void {
+  showDiagnostics = on;
+  for (const [path, views] of viewsByPath) {
+    const list = on ? (diagnosticsByPath.get(path) ?? []) : [];
+    for (const view of views) view.dispatch(setDiagnostics(view.state, toCm(view.state.doc, list)));
+  }
+  notifyCounts();
+}
+
+/** Error and warning counts per file, for the status bar. */
+const countListeners = new Set<() => void>();
+
+export function onDiagnosticCounts(listener: () => void): () => void {
+  countListeners.add(listener);
+  return () => countListeners.delete(listener);
+}
+
+/** Every file with showing errors or warnings, and its list (empty while error detection is off). */
+export function allDiagnostics(): Map<string, Diagnostic[]> {
+  const result = new Map<string, Diagnostic[]>();
+  if (!showDiagnostics) return result;
+  for (const [path, list] of diagnosticsByPath) {
+    const shown = list.filter((d) => d.severity === 'error' || d.severity === 'warning');
+    if (shown.length) result.set(path, shown);
+  }
+  return result;
+}
+
+/** How many errors and warnings are showing for a file (zero while error detection is off). */
+export function diagnosticCounts(path: string): { errors: number; warnings: number } {
+  const list = showDiagnostics ? (diagnosticsByPath.get(path) ?? []) : [];
+  return { errors: list.filter((d) => d.severity === 'error').length, warnings: list.filter((d) => d.severity === 'warning').length };
+}
+
+function notifyCounts(): void {
+  countListeners.forEach((l) => l());
+}
+
 /** A language server published diagnostics for a file: shows them in any editor displaying it. */
 export function receiveDiagnostics(path: string, list: Diagnostic[]): void {
+  // Servers often re-send the same results; re-applying them would close an open error popup.
+  if (JSON.stringify(diagnosticsByPath.get(path) ?? []) === JSON.stringify(list)) return;
   diagnosticsByPath.set(path, list);
+  notifyCounts();
+  if (!showDiagnostics) return;
   for (const view of viewsByPath.get(path) ?? []) view.dispatch(setDiagnostics(view.state, toCm(view.state.doc, list)));
 }
 
@@ -80,7 +125,7 @@ function completion(file: LspFile): Extension {
   const source = async (ctx: CompletionContext): Promise<CompletionResult | null> => {
     const word = ctx.matchBefore(/[\w#`[\]-]*/);
     if (!ctx.explicit && (!word || word.from === word.to)) return null;
-    const items = await window.saturn.modules.complete(request(ctx.state, file, ctx.pos)).catch(() => []);
+    const items = await window.saturn.languages.complete(request(ctx.state, file, ctx.pos)).catch(() => []);
     if (ctx.aborted || items.length === 0) return null;
     // Filter from the server's replace range when it gives one, else from the word before the cursor.
     const ranged = items.find((i) => i.range);
@@ -93,7 +138,7 @@ function completion(file: LspFile): Extension {
 /** Hover text from the server, shown as plain text. */
 function hover(file: LspFile): Extension {
   return hoverTooltip(async (view, pos) => {
-    const text = await window.saturn.modules.hover(request(view.state, file, pos)).catch(() => null);
+    const text = await window.saturn.languages.hover(request(view.state, file, pos)).catch(() => null);
     if (!text) return null;
     return {
       pos,
@@ -111,7 +156,7 @@ function hover(file: LspFile): Extension {
 export function goToDefinition(view: EditorView, pos = view.state.selection.main.head): boolean {
   const file = view.state.facet(lspFile);
   if (!file) return false;
-  void window.saturn.modules.definition(request(view.state, file, pos)).then((loc) => loc && file.openLocation(loc), () => undefined);
+  void window.saturn.languages.definition(request(view.state, file, pos)).then((loc) => loc && file.openLocation(loc), () => undefined);
   return true;
 }
 
@@ -127,7 +172,7 @@ const documentSync = ViewPlugin.fromClass(class {
     this.send();
     const known = diagnosticsByPath.get(file.path);
     // Applying state during construction isn't allowed, so the saved diagnostics go in on the next tick.
-    if (known) queueMicrotask(() => view.dispatch(setDiagnostics(view.state, toCm(view.state.doc, known))));
+    if (known && showDiagnostics) queueMicrotask(() => view.dispatch(setDiagnostics(view.state, toCm(view.state.doc, known))));
   }
 
   update(update: ViewUpdate) {
@@ -144,7 +189,7 @@ const documentSync = ViewPlugin.fromClass(class {
 
   private send() {
     const file = this.view.state.facet(lspFile);
-    if (file) void window.saturn.modules.syncDocument({ path: file.path, languageId: file.languageId, text: this.view.state.doc.toString() }).catch(() => undefined);
+    if (file) void window.saturn.languages.syncDocument({ path: file.path, languageId: file.languageId, text: this.view.state.doc.toString() }).catch(() => undefined);
   }
 });
 
@@ -164,7 +209,7 @@ export function languageServerFeatures(file: LspFile, { completion: withCompleti
   return [
     lspFile.of(file),
     documentSync,
-    lintGutter(),
+    // No gutter markers: the line-number column is kept free for breakpoints.
     hover(file),
     clickToDefinition,
     ...(withCompletion ? [completion(file)] : []),

@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 
+/** Written by Reset Saturn; on the next start the whole app-data folder is wiped (see SaturnApp). */
+export const RESET_MARKER = '.reset-pending';
+
 /** Locations inside Saturn's app-data folder, not project folders. */
 export class AppPaths {
   constructor(readonly root: string) {}

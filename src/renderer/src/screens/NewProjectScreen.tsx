@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { settingDefaults, type ContributionSnapshot, type SettingValues } from '@shared/modules';
 import {
-  Badge, Button, Checkbox, DialogFooter, FieldInput, FormField, Heading, SidebarFooterButton, SidebarMenu, TextInput, TitleBar,
+  Badge, Button, Checkbox, DialogFooter, FieldInput, ModuleIcon, FormField, Heading, SidebarFooterButton, SidebarMenu, TextInput, TitleBar,
 } from '@renderer/components';
 import { EMPTY_SNAPSHOT } from '@renderer/modules/ModuleBridge';
 
@@ -52,7 +52,7 @@ export function NewProjectScreen() {
         <SidebarMenu<string>
           items={[
             { id: PLAIN_TEXT, label: 'Plain Text', icon: <Badge text="T" /> },
-            ...modules.newProject.map((n) => ({ id: n.language, label: n.languageName, icon: <Badge text={n.badge} /> })),
+            ...modules.newProject.map((n) => ({ id: n.language, label: n.languageName, icon: <ModuleIcon icon={n.icon} badge={n.badge} /> })),
           ]}
           selected={kind}
           onSelect={setKind}

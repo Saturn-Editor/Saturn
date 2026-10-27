@@ -1,9 +1,9 @@
 export * from './icons';
 export { Button } from './Button';
 export { IconButton } from './IconButton';
-export { TextInput, Select, Checkbox, Toggle, FormField } from './inputs';
+export { TextInput, TextArea, Select, Checkbox, Toggle, FormField } from './inputs';
 export { FieldInput } from './FieldInput';
-export { Heading, DialogFooter, Badge, LanguageBadges, TitleBar } from './layout';
+export { Heading, DialogFooter, Badge, ModuleIcon, LanguageBadges, TitleBar } from './layout';
 export { Logo } from './Logo';
 export { SidebarMenu, SidebarFooterButton, type SidebarItem } from './SidebarMenu';
 export { TabMenu, type TabItem } from './TabMenu';

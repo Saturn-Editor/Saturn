@@ -20,6 +20,9 @@ export interface InfoDoc {
   bytes?: number;
 }
 
+const TYPING_SAVE_MS = 2000;
+const IDLE_SAVE_MS = 1000;
+
 function baseName(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
 }
@@ -40,6 +43,31 @@ export class EditorDocuments {
 
   constructor(private readonly api: Pick<SaturnApi, 'fs' | 'window'>) {}
 
+  /** Settings → Editor → Behaviour → Auto-save. */
+  autoSave: 'typing' | 'idle' | 'off' = 'idle';
+  /** Pending auto-saves per file. */
+  private readonly saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /** "typing": at most one save per 2s while changes keep coming; "idle": 1s after the last change. */
+  private scheduleAutoSave(path: string): void {
+    if (this.autoSave === 'off') return;
+    const pending = this.saveTimers.get(path);
+    if (pending && this.autoSave === 'typing') return;
+    clearTimeout(pending);
+    this.saveTimers.set(path, setTimeout(() => {
+      this.saveTimers.delete(path);
+      if (this.isDirty(path)) void this.save(path).catch((e) => console.error('Auto-save failed', e));
+    }, this.autoSave === 'typing' ? TYPING_SAVE_MS : IDLE_SAVE_MS));
+  }
+
+  /** With "idle" auto-save, leaving the window saves every changed file. */
+  saveOnLeave(): void {
+    if (this.autoSave === 'idle') void this.saveAll().catch((e) => console.error('Auto-save failed', e));
+  }
+
+  /** Opens still reading their file, so a quick second click on the same file doesn't open a second tab. */
+  private readonly opening = new Map<string, Promise<OpenResult>>();
+
   /** Opens (or switches to) a file; `line` and `column` (1-based) move the cursor there. */
   async open(path: string, opts: { force?: boolean; line?: number; column?: number } = {}): Promise<OpenResult> {
     if (opts.line) this.reveal.value = { path, line: opts.line, column: opts.column };
@@ -47,6 +75,14 @@ export class EditorDocuments {
       this.activePath.value = path;
       return 'opened';
     }
+    const pending = this.opening.get(path);
+    if (pending) return pending;
+    const load = this.load(path, opts).finally(() => this.opening.delete(path));
+    this.opening.set(path, load);
+    return load;
+  }
+
+  private async load(path: string, opts: { force?: boolean }): Promise<OpenResult> {
     const result = await this.api.fs.readFile(path, opts);
     this.infos.value = this.infos.value.filter((i) => i.path !== path);
     if (result.kind !== 'text') {
@@ -62,6 +98,13 @@ export class EditorDocuments {
   }
 
   close(path: string): void {
+    clearTimeout(this.saveTimers.get(path));
+    this.saveTimers.delete(path);
+    // With "idle" auto-save, closing a changed tab saves it first.
+    if (this.autoSave === 'idle' && this.isDirty(path)) {
+      void this.save(path).then(() => this.close(path), (e) => console.error('Auto-save failed', e));
+      return;
+    }
     const order = this.tabOrder();
     const index = order.indexOf(path);
     this.docs.value = this.docs.value.filter((d) => d.path !== path);
@@ -89,6 +132,7 @@ export class EditorDocuments {
   setText(path: string, text: string): void {
     this.docs.value = this.docs.value.map((d) => (d.path === path ? { ...d, text, dirty: text !== d.savedText } : d));
     this.reportDirty();
+    if (this.isDirty(path)) this.scheduleAutoSave(path);
   }
 
   async save(path = this.activePath.value): Promise<void> {

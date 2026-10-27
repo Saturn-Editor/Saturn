@@ -1,13 +1,16 @@
 import { join } from 'node:path';
 import { utilityProcess, type UtilityProcess } from 'electron';
-import type { ModuleMessage, SettingValues, TreeItem } from '@shared/modules';
+import type { MessageKind, ModuleMessage, NotificationAction, SettingValues, TreeItem } from '@shared/modules';
 import { Rpc } from '@shared/rpc';
-import type { InstalledModule } from './ModuleService';
+import type { InstalledModule } from './CodeModuleService';
 
 export interface HostEvents {
   openFile(projectPath: string, path: string, line?: number, column?: number): void;
   refreshPanel(panelId: string, itemId?: string): void;
   showMessage(message: ModuleMessage): void;
+  runInTerminal(projectPath: string, name: string, command: string): void;
+  restartLanguageServer(moduleId: string): void;
+  notify(notification: { moduleId: string; title: string; message?: string; kind?: MessageKind; actions?: NotificationAction[] }): void;
   crashed(reason: string): void;
 }
 
@@ -44,6 +47,9 @@ export class ExtensionHostService {
     rpc.handle('openFile', (projectPath: string, path: string, line?: number, column?: number) => this.events.openFile(projectPath, path, line, column));
     rpc.handle('refreshPanel', (panelId: string, itemId?: string) => this.events.refreshPanel(panelId, itemId));
     rpc.handle('showMessage', (message: ModuleMessage) => this.events.showMessage(message));
+    rpc.handle('notify', (n: Parameters<HostEvents['notify']>[0]) => this.events.notify(n));
+    rpc.handle('restartLanguageServer', (moduleId: string) => this.events.restartLanguageServer(moduleId));
+    rpc.handle('runInTerminal', (projectPath: string, name: string, command: string) => this.events.runInTerminal(projectPath, name, command));
     child.on('message', (message) => rpc.receive(message));
     child.on('exit', (code) => {
       rpc.rejectAll('The extension host stopped');
@@ -55,7 +61,7 @@ export class ExtensionHostService {
     });
     this.child = child;
     this.rpc = rpc;
-    const loadable = modules.map((m) => ({ id: m.manifest.id, dir: m.dir, main: m.manifest.main, settings: m.settings }));
+    const loadable = modules.map((m) => ({ id: m.manifest.id, dir: m.dir, main: m.manifest.main, settings: m.settings, storageDir: m.storageDir }));
     await rpc.call<{ id: string; error: string }[]>('activate', loadable).then(
       (failures) => failures.forEach((f) => console.error(`Module ${f.id} failed to activate: ${f.error}`)),
       (e) => console.error('Extension host failed to activate modules', e),

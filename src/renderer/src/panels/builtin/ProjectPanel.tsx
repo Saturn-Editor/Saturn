@@ -239,9 +239,10 @@ export function ProjectPanel() {
               selected={entry.path === selected}
               onClick={() => {
                 setSelected(entry.path);
+                // One click opens a file or expands a folder.
                 if (entry.kind === 'dir') toggle(entry.path);
+                else void ws.documents.open(entry.path);
               }}
-              onDoubleClick={() => entry.kind === 'file' && void ws.documents.open(entry.path)}
             />
           )}
           {creating && creating.dir === entry.path && (

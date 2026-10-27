@@ -1,5 +1,5 @@
 /** The module API version this build of Saturn implements. Modules declare a compatible range in `saturnApi`. */
-export const SATURN_API_VERSION = '0.1.0';
+export const SATURN_API_VERSION = '0.2.0';
 
 export interface ManifestLanguage {
   id: string;
@@ -23,8 +23,8 @@ export interface ManifestPanel {
   id: string;
   title: string;
   dock: 'left' | 'bottom';
-  /** Short text shown as the panel's icon, e.g. "MD". */
-  badge?: string;
+  /** Its icon: an .svg or .png file at the module folder root, e.g. "panel-icon.svg". Defaults to the module's icon, then "?". */
+  icon?: string;
 }
 
 export interface ManifestCommand {
@@ -78,12 +78,39 @@ export function settingDefaults(fields: NewProjectField[]): SettingValues {
   return Object.fromEntries(fields.map((f) => [f.id, f.default ?? (f.type === 'checkbox' ? false : (f.options?.[0]?.value ?? ''))]));
 }
 
-export interface ModuleManifest {
+/**
+ * Code modules are the two installable kinds that run code in the extension host: languages
+ * (highlighting, language servers, previews, templates, project types) and extensions (actions,
+ * scripts, panels, buttons and settings, but no languages).
+ */
+export type ModuleKind = 'language' | 'extension';
+
+export const MANIFEST_FILES: Record<ModuleKind, string> = { language: 'saturn-language.json', extension: 'saturn-extension.json' };
+
+/** An installed language's, extension's or theme's picture, at its folder root: the SVG if present, else the PNG. */
+export const ICON_FILES = ['icon.svg', 'icon.png'];
+/** Windows load those pictures as saturn-icon://module/<id> or saturn-icon://theme/<id>. */
+export const ICON_SCHEME = 'saturn-icon';
+
+/** A button on the editor's right-hand bar (below Settings); clicking it runs the command. */
+export interface ManifestButton {
+  /** A command the module registers with `saturn.commands.register`. */
+  command: string;
+  title: string;
+  /** Its icon: an .svg or .png file at the module folder root, e.g. "chat-icon.svg". Defaults to the module's icon, then "?". */
+  icon?: string;
+}
+
+/** A panel's or button's own icon file: an .svg or .png path inside the module folder, e.g. "icons/build.svg" (no "..", not absolute). */
+export const ICON_FILE_NAME = /^(?:[\w-][\w.-]*\/)*[\w-][\w.-]*\.(svg|png)$/i;
+
+/** What both kinds of manifest share. */
+interface CodeModuleManifest {
   id: string;
   name: string;
   version: string;
   description?: string;
-  /** Short text used as the language's icon, e.g. "MD", "C#". */
+  /** Short text used as the module's icon, e.g. "MD", "C#". */
   badge?: string;
   saturnApi: string;
   /** Entry point (ES module exporting `activate(saturn)`), relative to the module folder. */
@@ -91,44 +118,94 @@ export interface ModuleManifest {
   activationEvents?: string[];
   /** External tools the module needs; checked before its language server starts. */
   requires?: ManifestRequirement[];
-  contributes?: {
+}
+
+interface CommonContributions {
+  panels?: ManifestPanel[];
+  commands?: ManifestCommand[];
+  runConfigurations?: boolean;
+  settings?: ManifestSetting[];
+  buttons?: ManifestButton[];
+}
+
+/** saturn-language.json */
+export interface LanguageManifest extends CodeModuleManifest {
+  contributes?: CommonContributions & {
     languages?: ManifestLanguage[];
     languageServer?: ManifestLanguageServer;
-    panels?: ManifestPanel[];
-    commands?: ManifestCommand[];
     previews?: ManifestPreview[];
     fileTemplates?: ManifestFileTemplate[];
     newProject?: ManifestNewProject;
-    runConfigurations?: boolean;
-    settings?: ManifestSetting[];
   };
 }
 
+/** saturn-extension.json: actions, scripts, panels, buttons and settings, but no languages. */
+export interface ExtensionManifest extends CodeModuleManifest {
+  contributes?: CommonContributions;
+}
+
+export type ModuleManifest = LanguageManifest | ExtensionManifest;
+
 export interface ModuleSummary {
+  kind: ModuleKind;
   id: string;
   name: string;
   version: string;
   description: string;
   badge: string;
+  /** Its icon.svg / icon.png as a saturn-icon:// URL, or null to show `badge`. */
+  icon: string | null;
   enabled: boolean;
   /** Null when compatible; otherwise why the module can't load. */
   incompatible: string | null;
+  /** File extensions a language handles (empty for extensions). */
   languages: string[];
 }
 
 /** Everything enabled modules contribute, as sent to each window. */
+/** How a module is pictured: its icon (a saturn-icon:// URL) when it ships one, else its badge text. */
+export interface ModuleLook {
+  badge: string;
+  icon: string | null;
+}
+
 export interface ContributionSnapshot {
-  languages: (ManifestLanguage & { moduleId: string; badge: string; hasServer: boolean })[];
-  panels: (ManifestPanel & { moduleId: string })[];
-  commands: (ManifestCommand & { moduleId: string; moduleName: string; badge: string })[];
+  languages: (ManifestLanguage & ModuleLook & { moduleId: string; hasServer: boolean })[];
+  /** `iconUrl` is the panel's own icon file, else the module's icon, else null (shown as "?"). */
+  panels: (ManifestPanel & { moduleId: string; iconUrl: string | null })[];
+  commands: (ManifestCommand & ModuleLook & { moduleId: string; moduleName: string })[];
   previews: (ManifestPreview & { moduleId: string })[];
   fileTemplates: (ManifestFileTemplate & { moduleId: string })[];
-  newProject: (ManifestNewProject & { moduleId: string; languageName: string; badge: string })[];
+  newProject: (ManifestNewProject & ModuleLook & { moduleId: string; languageName: string })[];
   /** One Settings tab per module that declares settings. */
-  settings: { moduleId: string; moduleName: string; badge: string; items: ManifestSetting[] }[];
+  settings: (ModuleLook & { moduleId: string; moduleName: string; items: ManifestSetting[] })[];
+  /** Buttons on the editor's right-hand bar; `iconUrl` as for panels. */
+  buttons: (ManifestButton & { moduleId: string; iconUrl: string | null })[];
 }
 
 export type MessageKind = 'info' | 'warning' | 'error';
+
+/** A button on a notification: run one of the module's commands, open its Settings tab, or open an https link. */
+export interface NotificationAction {
+  label: string;
+  command?: string;
+  openSettings?: boolean;
+  url?: string;
+}
+
+/** An entry in the editor's notifications menu (the bell next to Settings). */
+export interface AppNotification {
+  id: string;
+  /** The module that sent it, or "saturn". */
+  moduleId: string;
+  title: string;
+  message: string;
+  kind: MessageKind;
+  actions: NotificationAction[];
+  /** When it arrived (ms since epoch). */
+  time: number;
+  read: boolean;
+}
 
 /** A message a module shows the user (in the editor window's status bar). */
 export interface ModuleMessage {

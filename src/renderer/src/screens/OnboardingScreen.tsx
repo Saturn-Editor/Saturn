@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { MarketplaceLanguage } from '@shared/marketplace';
 import { SATURN_API_VERSION, satisfiesCaret } from '@shared/modules';
-import { Badge, Button, Checkbox, DialogFooter, Heading, Logo } from '@renderer/components';
+import { Button, Checkbox, DialogFooter, Heading, Logo, ModuleIcon } from '@renderer/components';
 import { isUpToDate, MarketplaceEntries, useInstalledModules, useMarketplaceIndex } from '@renderer/screens/MarketplaceIndex';
 import { ModeToggle } from '@renderer/theme/ModeToggle';
 
@@ -15,7 +15,7 @@ function LanguagePicker({ entries, selected, onToggle }: { entries: MarketplaceL
       {entries.map((l) => (
         <div key={l.id} class="flex items-center gap-3 py-1.5 border-b border-divider" data-testid="onboarding-language">
           <Checkbox checked={selected.has(l.id)} onChange={(on) => onToggle(l.id, on)} testId={`onboarding-language-${l.id}`} />
-          <Badge text={l.badge ?? l.name.slice(0, 2).toUpperCase()} class="size-6" />
+          <ModuleIcon icon={l.image} badge={l.name.slice(0, 2).toUpperCase()} class="size-6" />
           <div class="flex-1 min-w-0">
             <div class="text-strong truncate">{l.name}</div>
             <div class="text-muted truncate">{l.description}</div>

@@ -10,7 +10,8 @@ import { ThemeApplier } from './theme/ThemeApplier';
 import { followKeymap } from './commands/keymap';
 import './styles.css';
 
-const screens: Record<WindowKind, ComponentType> = {
+// Each window shows its screen with no props (Settings and Marketplace default to their own-window layout).
+const screens: Record<WindowKind, ComponentType<any>> = {
   welcome: WelcomeScreen,
   editor: EditorScreen,
   settings: SettingsScreen,
