@@ -17,6 +17,10 @@ function parentOf(path: string): string {
   return path.replace(/[\\/][^\\/]*$/, '');
 }
 
+/** Expand all opens at most this many folders, and skips these (they're usually huge and generated). */
+const EXPAND_LIMIT = 500;
+const EXPAND_SKIP = new Set(['.git', 'node_modules', 'bin', 'obj', 'dist', 'build', 'out', '.venv', 'vendor', 'target']);
+
 const REVEAL_LABEL = navigator.userAgent.includes('Mac') ? 'Reveal in Finder'
   : navigator.userAgent.includes('Windows') ? 'Show in Explorer' : 'Show in File Manager';
 
@@ -107,6 +111,39 @@ export function ProjectPanel() {
       });
     });
   }, [root]);
+
+  // The title bar's Expand all, Collapse all and Reload from disk.
+  const request = ws.projectTreeRequest.value;
+  useEffect(() => {
+    if (!request) return;
+    if (request.action === 'collapseAll') setExpanded(new Set([root]));
+    if (request.action === 'refresh') {
+      // Reload every folder that's been read, dropping ones that no longer exist.
+      setChildren(new Map());
+      for (const dir of new Set([root, ...expanded])) void load(dir);
+    }
+    if (request.action === 'expandAll') {
+      void (async () => {
+        const open = new Set([root]);
+        const loaded = new Map(children);
+        const queue = [root];
+        while (queue.length && open.size < EXPAND_LIMIT) {
+          const dir = queue.shift()!;
+          const entries = loaded.get(dir) ?? await window.saturn.fs.readDir(dir).catch(() => []);
+          loaded.set(dir, entries);
+          for (const e of entries) {
+            if (e.kind !== 'dir' || EXPAND_SKIP.has(e.name) || open.size >= EXPAND_LIMIT) continue;
+            open.add(e.path);
+            queue.push(e.path);
+          }
+        }
+        setChildren(loaded);
+        // Folders the limit stopped before reading stay closed (they'd look empty open).
+        setExpanded(new Set([...open].filter((dir) => loaded.has(dir))));
+        if (queue.length) ws.notice.value = { text: `Expanded the first ${EXPAND_LIMIT} folders`, kind: 'info' };
+      })();
+    }
+  }, [request?.at]);
 
   const expand = (dir: string) => {
     setExpanded((prev) => new Set(prev).add(dir));

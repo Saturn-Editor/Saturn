@@ -1,0 +1,59 @@
+# Installers and releases. `npm run dist` builds for this machine; the Release workflow
+# (.github/workflows/release.yml) builds macOS, Windows and Linux and publishes them to GitHub Releases,
+# which is also where Saturn checks for updates (electron-updater).
+appId: com.saturn-editor.saturn
+productName: Saturn
+copyright: Copyright © Lewis Milburn
+
+directories:
+  output: dist
+  buildResources: resources/build
+
+files:
+  - out/**
+  - resources/**
+  - "!resources/build/**"
+  - package.json
+
+# node-pty is a native module: it's rebuilt for Electron and must sit outside the asar archive.
+asarUnpack:
+  - node_modules/node-pty/**
+npmRebuild: true
+
+publish:
+  provider: github
+  owner: Saturn-Editor
+  repo: Saturn
+  releaseType: release
+
+mac:
+  category: public.app-category.developer-tools
+  icon: resources/icons/icon.icns
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    # The zip is what auto-update downloads on macOS.
+    - target: zip
+      arch: [arm64, x64]
+  hardenedRuntime: true
+  # Signing and notarization run when the CSC_LINK / APPLE_* secrets are set (see release.yml);
+  # without them the build is unsigned, and macOS auto-update won't install it.
+
+win:
+  icon: resources/icons/icon.ico
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+linux:
+  icon: resources/icons/icon.png
+  category: Development
+  target:
+    - target: AppImage
+      arch: [x64]

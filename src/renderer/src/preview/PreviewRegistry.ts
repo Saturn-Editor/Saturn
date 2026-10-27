@@ -1,4 +1,7 @@
 import { signal } from '@preact/signals';
+import type { ViewMode } from '@shared/modules';
+
+export type { ViewMode };
 
 export interface PreviewContext {
   path: string;
@@ -16,10 +19,10 @@ export interface PreviewProvider {
   extensions: string[];
   /** The module id that added it. */
   source: string;
+  /** How its files open unless the user chose otherwise (Settings → Languages). */
+  defaultView?: ViewMode;
   render: (text: string, ctx: PreviewContext) => string | Promise<string>;
 }
-
-export type ViewMode = 'code' | 'split' | 'preview';
 
 /** Which file types can be previewed and how. The core registers none; languages add them. */
 export class PreviewRegistry {

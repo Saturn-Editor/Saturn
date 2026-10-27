@@ -50,6 +50,8 @@ export interface SaturnModuleApi {
     onCreate(handler: (ctx: ModuleContext & { fields: Record<string, string | boolean> }) => void | Promise<void>): void;
     /** A project's editor window closed; release anything held for it (watchers, caches). */
     onDidClose(listener: (ctx: ModuleContext) => void): void;
+    /** A project opened in an editor window. Also fires, just after activate(), for projects already open. */
+    onDidOpen(listener: (ctx: ModuleContext) => void): void;
   };
   run: { registerProvider(provide: (ctx: ModuleContext) => { name: string; command: string }[] | Promise<{ name: string; command: string }[]>): void };
   workspace: {
@@ -116,6 +118,7 @@ class ExtensionHost {
     });
     this.rpc.handle('filesChanged', (projectPath: string, dir: string) => this.emit('filesChanged', { projectPath, dir }));
     this.rpc.handle('projectClosed', (projectPath: string) => this.emit('projectClosed', { projectPath }));
+    this.rpc.handle('projectOpened', (projectPath: string) => this.emit('projectOpened', { projectPath }));
     this.rpc.handle('runCommand', (id: string, ctx: ModuleContext) => this.need(this.commands, id, 'command')(ctx));
     this.rpc.handle('treeChildren', (id: string, parentId: string | null, ctx: ModuleContext) =>
       this.need(this.trees, id, 'panel').getChildren(parentId, ctx));
@@ -198,6 +201,7 @@ class ExtensionHost {
       projects: {
         onCreate: (handler) => void this.projectHandlers.set(moduleId, handler),
         onDidClose: (listener) => this.on('projectClosed', moduleId, listener),
+        onDidOpen: (listener) => this.on('projectOpened', moduleId, listener),
       },
       run: { registerProvider: (provide) => void this.runProviders.set(moduleId, provide) },
       workspace: {

@@ -1,10 +1,11 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createMessageConnection, StreamMessageReader, StreamMessageWriter, type MessageConnection } from 'vscode-jsonrpc/node';
 import type {
-  CompletionItem, CompletionRequest, Diagnostic, DiagnosticSeverity, MessageKind, ModuleMessage, NotificationAction, SettingValues,
-  SourceLocation, TextRange,
+  CompletionItem, CompletionRequest, Diagnostic, DiagnosticSeverity, DocumentRequest, DocumentSymbol, FileEdits, MessageKind, ModuleMessage,
+  NotificationAction, ReferenceLocation, SettingValues, SignatureHelp, SourceLocation, TextEdit, TextRange,
 } from '@shared/modules';
 import type { InstalledLanguage as InstalledModule } from './CodeModuleService';
 
@@ -32,6 +33,28 @@ interface LspCompletionItem {
 
 type LspLocation = { uri: string; range: LspRange } | { targetUri: string; targetSelectionRange?: LspRange; targetRange: LspRange };
 
+interface LspTextEdit {
+  range: LspRange;
+  newText: string;
+}
+
+/** DocumentSymbol (hierarchical) or the older flat SymbolInformation. */
+type LspSymbol =
+  | { name: string; detail?: string; kind: number; range: LspRange; selectionRange: LspRange; children?: LspSymbol[] }
+  | { name: string; kind: number; location: { uri: string; range: LspRange }; containerName?: string };
+
+interface LspWorkspaceEdit {
+  changes?: Record<string, LspTextEdit[]>;
+  /** TextDocumentEdits; file creates, renames and deletes (which have a `kind`) aren't supported. */
+  documentChanges?: ({ textDocument: { uri: string }; edits: LspTextEdit[] } | { kind: string })[];
+}
+
+interface LspSignatureHelp {
+  signatures: { label: string; documentation?: unknown; parameters?: { label: string | [number, number] }[]; activeParameter?: number }[];
+  activeSignature?: number;
+  activeParameter?: number;
+}
+
 export interface LanguageServerEvents {
   /** A server published diagnostics for a file in a project. */
   diagnostics(projectPath: string, path: string, diagnostics: Diagnostic[]): void;
@@ -49,9 +72,21 @@ const CLIENT_CAPABILITIES = {
     hover: { contentFormat: ['plaintext', 'markdown'] },
     definition: { linkSupport: true },
     publishDiagnostics: { relatedInformation: false },
+    documentSymbol: { hierarchicalDocumentSymbolSupport: true },
+    references: {},
+    rename: { prepareSupport: false },
+    formatting: {},
+    signatureHelp: { signatureInformation: { parameterInformation: { labelOffsetSupport: true }, activeParameterSupport: true } },
   },
-  workspace: {},
+  workspace: { workspaceEdit: { documentChanges: true } },
 };
+
+const toEdit = (e: LspTextEdit): TextEdit => ({ range: toRange(e.range), newText: e.newText });
+
+function toSymbol(s: LspSymbol): DocumentSymbol {
+  if ('location' in s) return { name: s.name, detail: s.containerName, kind: s.kind, range: toRange(s.location.range), children: [] };
+  return { name: s.name, detail: s.detail, kind: s.kind, range: toRange(s.selectionRange ?? s.range), children: (s.children ?? []).map(toSymbol) };
+}
 
 const SEVERITIES: Record<number, DiagnosticSeverity> = { 1: 'error', 2: 'warning', 3: 'info', 4: 'hint' };
 const REQUIREMENT_TIMEOUT_MS = 10_000;
@@ -69,9 +104,32 @@ function hoverText(contents: unknown): string {
   return c.value ?? '';
 }
 
+/** Replaces "${setting:<id>}" in a string with that module setting's value. */
+export function fillSettings(owner: InstalledModule, s: string): string {
+  return s.replace(/\$\{setting:([\w.-]+)\}/g, (_m, id: string) => String(owner.settings[id] ?? ''));
+}
+
+/** Starts a module's language server or debugger over stdio. */
+export function spawnModuleProcess(owner: InstalledModule, config: { command: string; args?: string[] }, cwd: string): { child: ChildProcess; command: string } {
+  const command = fillSettings(owner, config.command);
+  // "node" runs on Saturn's own runtime, so users never need Node installed.
+  const useSaturnNode = command === 'node';
+  // Arguments that look like file paths resolve against the module folder (settings are used as given).
+  const args = (config.args ?? []).map((a) => (a.includes('${setting:') ? fillSettings(owner, a) : /[\\/]|\.[cm]?js$/.test(a) ? join(owner.dir, a) : a));
+  const child = spawn(useSaturnNode ? process.execPath : command, args, {
+    cwd,
+    // The module's storage folder (e.g. where it downloaded the real server) is passed on as SATURN_MODULE_STORAGE.
+    env: { ...process.env, SATURN_MODULE_STORAGE: owner.storageDir, ...(useSaturnNode && { ELECTRON_RUN_AS_NODE: '1' }) },
+    stdio: 'pipe',
+    shell: !useSaturnNode && process.platform === 'win32',
+  });
+  return { child, command };
+}
+
 /**
  * Starts language servers (one per project and module), keeps them in sync with open files, and asks
- * them for completions, hovers and definitions. Diagnostics they publish are forwarded to the window.
+ * them for completions, hovers, definitions, outlines, usages, renames, formatting and parameter hints.
+ * Diagnostics they publish are forwarded to the window.
  */
 export class LanguageServerService {
   private readonly servers = new Map<string, Server>();
@@ -187,6 +245,85 @@ export class LanguageServerService {
     return { path: fileURLToPath(uri), line: range.start.line + 1, column: range.start.character + 1 };
   }
 
+  /** Everything defined in a file, nested (classes containing methods…), for the Outline panel. */
+  async symbols(projectPath: string, req: DocumentRequest): Promise<DocumentSymbol[]> {
+    const server = await this.sync(projectPath, req);
+    if (!server) return [];
+    const result = (await server.connection.sendRequest('textDocument/documentSymbol', {
+      textDocument: { uri: pathToFileURL(req.path).href },
+    }).catch(() => null)) as LspSymbol[] | null;
+    return (result ?? []).filter((s) => !('location' in s) || s.location.uri === pathToFileURL(req.path).href).map(toSymbol);
+  }
+
+  /** Every usage of the symbol at a position (declaration included), with each line's text. */
+  async references(projectPath: string, req: CompletionRequest): Promise<ReferenceLocation[]> {
+    const server = await this.sync(projectPath, req);
+    if (!server) return [];
+    const result = (await server.connection.sendRequest('textDocument/references', {
+      textDocument: { uri: pathToFileURL(req.path).href },
+      position: { line: req.line, character: req.character },
+      context: { includeDeclaration: true },
+    }).catch(() => null)) as { uri: string; range: LspRange }[] | null;
+    // Lines for the previews: the request's own text for its file, the saved file for the rest.
+    const lines = new Map<string, Promise<string[]>>([[req.path, Promise.resolve(req.text.split(/\r?\n/))]]);
+    const linesOf = (path: string) => {
+      if (!lines.has(path)) lines.set(path, readFile(path, 'utf8').then((t) => t.split(/\r?\n/), () => []));
+      return lines.get(path)!;
+    };
+    const found = (result ?? []).filter((r) => r.uri.startsWith('file:'));
+    return Promise.all(found.map(async (r) => {
+      const path = fileURLToPath(r.uri);
+      return { path, range: toRange(r.range), preview: ((await linesOf(path))[r.range.start.line] ?? '').trim() };
+    }));
+  }
+
+  /** The edits that rename the symbol at a position everywhere; rejects with the server's reason if it can't. */
+  async rename(projectPath: string, req: CompletionRequest & { newName: string }): Promise<FileEdits[]> {
+    const server = await this.sync(projectPath, req);
+    if (!server) return [];
+    const result = (await server.connection.sendRequest('textDocument/rename', {
+      textDocument: { uri: pathToFileURL(req.path).href },
+      position: { line: req.line, character: req.character },
+      newName: req.newName,
+    })) as LspWorkspaceEdit | null;
+    const byUri = new Map<string, LspTextEdit[]>(Object.entries(result?.changes ?? {}));
+    for (const change of result?.documentChanges ?? []) {
+      if ('textDocument' in change) byUri.set(change.textDocument.uri, [...(byUri.get(change.textDocument.uri) ?? []), ...change.edits]);
+    }
+    return [...byUri].filter(([uri]) => uri.startsWith('file:')).map(([uri, edits]) => ({ path: fileURLToPath(uri), edits: edits.map(toEdit) }));
+  }
+
+  /** Edits that format the whole file in the language's style. */
+  async format(projectPath: string, req: DocumentRequest & { tabSize: number; insertSpaces: boolean }): Promise<TextEdit[]> {
+    const server = await this.sync(projectPath, req);
+    if (!server) return [];
+    const result = (await server.connection.sendRequest('textDocument/formatting', {
+      textDocument: { uri: pathToFileURL(req.path).href },
+      options: { tabSize: req.tabSize, insertSpaces: req.insertSpaces },
+    }).catch(() => null)) as LspTextEdit[] | null;
+    return (result ?? []).map(toEdit);
+  }
+
+  /** Parameter hints for the call around a position, or null outside a call. */
+  async signatureHelp(projectPath: string, req: CompletionRequest): Promise<SignatureHelp | null> {
+    const server = await this.sync(projectPath, req);
+    if (!server) return null;
+    const result = (await server.connection.sendRequest('textDocument/signatureHelp', {
+      textDocument: { uri: pathToFileURL(req.path).href },
+      position: { line: req.line, character: req.character },
+    }).catch(() => null)) as LspSignatureHelp | null;
+    const signature = result?.signatures[result.activeSignature ?? 0] ?? result?.signatures[0];
+    if (!signature) return null;
+    const param = signature.parameters?.[signature.activeParameter ?? result?.activeParameter ?? 0]?.label;
+    let activeParameter: [number, number] | null = null;
+    if (Array.isArray(param)) activeParameter = param;
+    else if (param) {
+      const at = signature.label.indexOf(param);
+      if (at >= 0) activeParameter = [at, at + param.length];
+    }
+    return { label: signature.label, documentation: hoverText(signature.documentation).trim() || undefined, activeParameter };
+  }
+
   stopProject(projectPath: string): void {
     for (const [key, server] of this.servers) {
       if (key.startsWith(`${projectPath}\0`)) this.stop(key, server);
@@ -246,20 +383,7 @@ export class LanguageServerService {
     const started = this.servers.get(key);
     if (started) return started;
 
-    // "${setting:jarPath}" in the command or an argument is replaced by that module setting's value.
-    const fill = (s: string) => s.replace(/\$\{setting:([\w.-]+)\}/g, (_m, id: string) => String(owner.settings[id] ?? ''));
-    const command = fill(config.command);
-    // "node" runs on Saturn's own runtime, so users never need Node installed.
-    const useSaturnNode = command === 'node';
-    // Arguments that look like file paths resolve against the module folder (settings are used as given).
-    const args = (config.args ?? []).map((a) => (a.includes('${setting:') ? fill(a) : /[\\/]|\.[cm]?js$/.test(a) ? join(owner.dir, a) : a));
-    const child = spawn(useSaturnNode ? process.execPath : command, args, {
-      cwd: projectPath,
-      // The module's storage folder (e.g. where it downloaded the real server) is passed on as SATURN_MODULE_STORAGE.
-      env: { ...process.env, SATURN_MODULE_STORAGE: owner.storageDir, ...(useSaturnNode && { ELECTRON_RUN_AS_NODE: '1' }) },
-      stdio: 'pipe',
-      shell: !useSaturnNode && process.platform === 'win32',
-    });
+    const { child, command } = spawnModuleProcess(owner, config, projectPath);
     const connection = createMessageConnection(new StreamMessageReader(child.stdout!), new StreamMessageWriter(child.stdin!));
     connection.onNotification('textDocument/publishDiagnostics', (params: { uri: string; diagnostics: { range: LspRange; severity?: number; message: string; source?: string }[] }) => {
       if (!params.uri.startsWith('file:')) return;

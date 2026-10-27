@@ -26,6 +26,12 @@ export class WindowManager {
   /** Appearance → Text size, as a zoom factor applied to every window. */
   private zoom = 1;
   private readonly editorClosedListeners: ((projectPath: string) => void)[] = [];
+  private readonly editorOpenedListeners: ((projectPath: string) => void)[] = [];
+
+  /** Called with the project path whenever a new editor window opens. */
+  onEditorOpened(listener: (projectPath: string) => void): void {
+    this.editorOpenedListeners.push(listener);
+  }
 
   /** Called with the project path whenever an editor window has closed. */
   onEditorClosed(listener: (projectPath: string) => void): void {
@@ -56,6 +62,7 @@ export class WindowManager {
     }
     const win = this.create('editor', { project: key });
     this.editors.set(key, win);
+    this.editorOpenedListeners.forEach((l) => l(key));
     win.on('close', (event) => {
       if (!this.dirty.has(win.id)) return;
       event.preventDefault();

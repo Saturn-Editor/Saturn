@@ -21,7 +21,8 @@ export class NotificationService {
 
   add(n: { moduleId: string; title: string; message?: string; kind?: MessageKind; actions?: NotificationAction[] }): void {
     // Only https links can be opened from a notification.
-    const actions = (n.actions ?? []).filter((a) => a.label && (a.command || a.openSettings || a.url?.startsWith('https://')));
+    // Only Saturn itself may offer "restart to update".
+    const actions = (n.actions ?? []).filter((a) => a.label && (a.command || a.openSettings || a.url?.startsWith('https://') || (a.installUpdate && n.moduleId === 'saturn')));
     this.items = [{
       id: String(this.nextId++),
       moduleId: n.moduleId,

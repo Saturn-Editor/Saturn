@@ -1,16 +1,23 @@
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, nativeTheme, net, protocol } from 'electron';
+import { app, BrowserWindow, nativeTheme, net, protocol } from 'electron';
+import { channel } from '@shared/api';
 import { ICON_FILE_NAME, ICON_FILES, ICON_SCHEME } from '@shared/modules';
 import { spawn } from 'node-pty';
-import { AppPaths, RESET_MARKER } from './Helpers/AppPaths';
+import { AppPaths, SATURN_DATA } from './Helpers/AppPaths';
 import { setUpAppMenu } from './Helpers/appMenu';
 import { IpcRouter } from './IpcRouter';
 import { ExtensionHostService } from './Services/ExtensionHostService';
 import { LanguageServerService } from './Services/LanguageServerService';
 import { MarketplaceService } from './Services/MarketplaceService';
 import { NotificationService } from './Services/NotificationService';
+import { UpdateService } from './Services/UpdateService';
+import { DebugService } from './Services/DebugService';
+import { AskpassService } from './Services/AskpassService';
+import { setAskpass } from './Services/GitService';
+import { BreakpointStore } from './Store/BreakpointStore';
 import { CodeModuleService } from './Services/CodeModuleService';
 import { ProjectCreator } from './Services/ProjectCreator';
 import { ModuleSettingsStore } from './Store/ModuleSettingsStore';
@@ -34,6 +41,9 @@ const nodePtyFactory: PtyFactory = (shell, args, opts) => {
   };
 };
 
+/** How often installed languages, extensions and themes are checked for updates. */
+const MARKETPLACE_CHECK_MS = 6 * 60 * 60 * 1000;
+
 export class SaturnApp {
   constructor() {
     // Names the app in menus ("Quit Saturn"). In development macOS still shows "Electron" as the bold
@@ -41,10 +51,6 @@ export class SaturnApp {
     app.setName('Saturn');
     // Must run before 'ready' so every store and Chromium profile lands in the override.
     if (process.env.SATURN_USER_DATA) app.setPath('userData', process.env.SATURN_USER_DATA);
-    // Reset Saturn left a marker: wipe the app-data folder now, before Chromium or any store opens it,
-    // so Saturn starts as new (with the first-launch popup).
-    const userData = app.getPath('userData');
-    if (existsSync(join(userData, RESET_MARKER))) rmSync(userData, { recursive: true, force: true });
     // Installed languages', extensions' and themes' icon.svg / icon.png, served to windows (see serveIcons).
     protocol.registerSchemesAsPrivileged([{ scheme: ICON_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
   }
@@ -88,12 +94,50 @@ export class SaturnApp {
     );
     this.serveIcons(modules, paths.dir('themes'));
     let router: IpcRouter | null = null;
+    // Set once everything it needs exists (below).
+    let resetSaturn: () => Promise<void> = async () => undefined;
     const notifications = new NotificationService();
     notifications.onChanged((items) => router?.broadcast('notifications', 'changed', items));
+    // Saturn updates: windows see progress; a downloaded update posts a "restart to update" notification.
+    const updates = new UpdateService();
+    updates.onChanged((status) => {
+      router?.broadcast('updates', 'changed', status);
+      if (status.state === 'available' && status.downloadUrl) {
+        notifications.add({
+          moduleId: 'saturn',
+          title: `Saturn ${status.version} is available`,
+          message: "This copy of Saturn can't update itself. Download the new version and replace the app in Applications.",
+          actions: [{ label: 'Download', url: status.downloadUrl }],
+        });
+      }
+      if (status.state === 'ready') {
+        notifications.add({
+          moduleId: 'saturn',
+          title: `Saturn ${status.version} is ready to install`,
+          message: 'Restart Saturn to finish updating. It also installs when you next quit.',
+          actions: [{ label: 'Restart to update', installUpdate: true }],
+        });
+      }
+    });
+    // Git asks for credentials (push, pull, clone) in the project's window, or the focused one for a clone.
+    const askpass = new AskpassService(paths.dir('askpass'), {
+      prompt: (projectPath, id, text, secret) => {
+        const win = (projectPath && windows.editorFor(projectPath)) || BrowserWindow.getFocusedWindow() || windows.all()[0];
+        if (win) win.webContents.send(channel('git', 'credentialPrompt'), id, text, secret);
+        else askpass.answer(id, null);
+      },
+    });
+    await askpass.start().then(() => setAskpass((projectPath) => askpass.env(projectPath)), (e) => console.error('Git sign-in prompts unavailable', e));
+    const marketplace = new MarketplaceService(modules, themes, async () => (await settings.app()).marketplaceUrl);
     const languageServers = new LanguageServerService({
       diagnostics: (projectPath, path, diagnostics) => router?.sendToProject(projectPath, 'languages', 'diagnostics', path, diagnostics),
       message: (message) => router?.broadcast('modules', 'message', message),
       notify: (n) => notifications.add(n),
+    });
+    const debug = new DebugService(new BreakpointStore(paths.file('breakpoints.json')), {
+      changed: (projectPath, state) => router?.sendToProject(projectPath, 'debug', 'changed', state),
+      output: (projectPath, text, category) => router?.sendToProject(projectPath, 'debug', 'output', text, category),
+      message: (projectPath, message, kind) => router?.sendToProject(projectPath, 'modules', 'message', { message, kind, moduleId: 'saturn' }),
     });
     const host = new ExtensionHostService({
       openFile: (projectPath, path, line, column) => router?.sendToProject(projectPath, 'modules', 'openFile', path, line, column),
@@ -108,9 +152,11 @@ export class SaturnApp {
       crashed: (message) => router?.broadcast('modules', 'message', { message, kind: 'error', moduleId: 'saturn' }),
     });
     // Closing a project's window: modules release what they hold for it, and its language servers stop.
+    windows.onEditorOpened((projectPath) => host.projectOpened(projectPath));
     windows.onEditorClosed((projectPath) => {
       host.projectClosed(projectPath);
       languageServers.stopProject(projectPath);
+      void debug.stop(projectPath);
     });
 
     router = new IpcRouter({
@@ -127,7 +173,11 @@ export class SaturnApp {
       settings,
       paths,
       notifications,
-      marketplace: new MarketplaceService(modules, themes, async () => (await settings.app()).marketplaceUrl),
+      updates,
+      debug,
+      askpass,
+      marketplace,
+      reset: () => resetSaturn(),
     });
     router.register();
 
@@ -135,7 +185,10 @@ export class SaturnApp {
     const reloadModules = async () => {
       const active = await modules.active();
       languageServers.setModules(await modules.activeLanguages());
+      debug.setModules(await modules.activeLanguages());
       await host.restart(active).catch((e) => console.error('Extension host failed to start', e));
+      // Freshly activated modules hear about projects that are already open.
+      for (const [projectPath] of windows.editorWindows()) host.projectOpened(projectPath);
       router?.broadcast('modules', 'changed', await modules.snapshot());
     };
     modules.onChanged(() => void reloadModules());
@@ -144,12 +197,16 @@ export class SaturnApp {
       host.settingsChanged(moduleId, values);
       languageServers.settingsChanged(moduleId, values);
       router?.broadcast('modules', 'settingsChanged', moduleId, values);
+      // Language feature switches change what editors get, so windows receive fresh contributions too.
+      void modules.snapshot().then((snap) => router?.broadcast('modules', 'changed', snap));
     });
     await reloadModules();
     // Quitting waits (briefly) for modules' deactivate() before stopping the host.
     let shutDown = false;
     app.on('before-quit', (event) => {
       languageServers.stopAll();
+      debug.stopAll();
+      askpass.stop();
       if (shutDown) return;
       event.preventDefault();
       void host.shutdown().finally(() => {
@@ -164,12 +221,50 @@ export class SaturnApp {
     });
     // Text size scales every window, including ones opened later.
     windows.setZoom((await settings.app()).textSize / 100);
+    updates.setAutomatic((await settings.app()).autoUpdate);
+    // Installed languages, extensions and themes: a notification when the marketplace has newer
+    // versions (checked with Saturn's own updates), once per set of new versions.
+    let notifiedUpdates = '';
+    const checkMarketplace = async () => {
+      if (!(await settings.app()).autoUpdate) return;
+      const found = await marketplace.availableUpdates().catch(() => []);
+      const key = found.map((u) => `${u.kind}:${u.id}@${u.to}`).join();
+      if (!found.length || key === notifiedUpdates) return;
+      notifiedUpdates = key;
+      notifications.add({
+        moduleId: 'saturn',
+        title: found.length === 1 ? `An update for ${found[0].name} is available` : `${found.length} updates are available`,
+        message: found.map((u) => `${u.name} ${u.from} → ${u.to}`).join(', '),
+        actions: [{ label: found.length === 1 ? 'Update' : 'Update all', updateAll: true }, { label: 'Open Marketplace', openMarketplace: found[0].kind }],
+      });
+    };
+    void checkMarketplace();
+    setInterval(() => void checkMarketplace(), MARKETPLACE_CHECK_MS);
 
-    const welcome = windows.openWelcome();
-    // First launch: the welcome popup shows once; closing it any way counts as done.
-    if (!(await settings.get()).onboarded) {
-      windows.openOnboarding(welcome).on('closed', () => void settings.setOnboarded());
-    }
+    const openStartWindows = async () => {
+      const welcome = windows.openWelcome();
+      // First launch: the welcome popup shows once; closing it any way counts as done.
+      if (!(await settings.get()).onboarded) {
+        windows.openOnboarding(welcome).on('closed', () => void settings.setOnboarded());
+      }
+    };
+    await openStartWindows();
+
+    // Reset Saturn (already confirmed): close every window without asking about unsaved changes, stop
+    // module code, delete Saturn's own data, then start over as on a first launch. No relaunch, so it
+    // works the same in development and in packaged builds.
+    resetSaturn = async () => {
+      for (const win of windows.all()) win.destroy();
+      await host.shutdown();
+      languageServers.stopAll();
+      debug.stopAll();
+      notifications.clear();
+      await Promise.all(SATURN_DATA.map((name) => rm(join(paths.root, name), { recursive: true, force: true })));
+      windows.setZoom(1);
+      await reloadModules();
+      router?.broadcast('themes', 'changed', await themes.active());
+      await openStartWindows();
+    };
     app.on('activate', () => {
       if (windows.all().length === 0) windows.openWelcome();
     });

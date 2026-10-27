@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { cp, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
-  ICON_FILE_NAME, ICON_FILES, ICON_SCHEME, MANIFEST_FILES, SATURN_API_VERSION, satisfiesCaret, settingDefaults, type ContributionSnapshot, type LanguageManifest,
+  featureKey, ICON_FILE_NAME, ICON_FILES, ICON_SCHEME, LANGUAGE_FEATURES, MANIFEST_FILES, type LanguageFeature, SATURN_API_VERSION, satisfiesCaret, settingDefaults, type ContributionSnapshot, type LanguageManifest,
   type ModuleKind, type ModuleManifest, type ModuleSummary, type SettingValue, type SettingValues,
 } from '@shared/modules';
 import { findFiles } from '../Helpers/findFiles';
@@ -25,6 +25,13 @@ export interface InstalledModule {
 export type InstalledLanguage = InstalledModule & { manifest: LanguageManifest };
 
 const ID = /^[a-z0-9][a-z0-9.-]*$/;
+
+/** The features a language's server declares (all of them when it doesn't say); none for modules without a server. */
+function declaredFeatures(m: ModuleManifest): LanguageFeature[] {
+  const server = (m as LanguageManifest).contributes?.languageServer;
+  if (!server) return [];
+  return server.features ?? LANGUAGE_FEATURES.map((f) => f.id);
+}
 
 /** The module's icon as a saturn-icon:// URL if it ships icon.svg or icon.png (versioned, so updates show), else null. */
 function iconUrl(dir: string, m: ModuleManifest): string | null {
@@ -152,9 +159,12 @@ export class CodeModuleService {
   /** Saves one value; it must be a setting the module declares, with a matching type. */
   async setSetting(moduleId: string, id: string, value: SettingValue): Promise<void> {
     const found = (await this.list()).find((m) => m.manifest.id === moduleId);
+    // Language feature switches ("feature:<name>") are booleans for features the server declares.
+    const isFeature = !!found && declaredFeatures(found.manifest).some((f) => featureKey(f) === id);
     const setting = found?.manifest.contributes?.settings?.find((s) => s.id === id);
-    if (!found || !setting) throw new Error(`Unknown setting: ${moduleId}.${id}`);
-    if ((setting.type === 'checkbox') !== (typeof value === 'boolean')) throw new Error(`Wrong value type for ${setting.label}`);
+    if (!found || (!setting && !isFeature)) throw new Error(`Unknown setting: ${moduleId}.${id}`);
+    const wantsBoolean = isFeature || setting?.type === 'checkbox';
+    if (wantsBoolean !== (typeof value === 'boolean')) throw new Error(`Wrong value type for ${setting?.label ?? id}`);
     await this.settingsStore.set(moduleId, id, value);
     const values = await this.valuesFor(found.manifest);
     this.settingsListeners.forEach((l) => l(moduleId, values));
@@ -165,6 +175,7 @@ export class CodeModuleService {
     const stored = await this.settingsStore.values(manifest.id);
     const values = settingDefaults(declared);
     for (const s of declared) if (stored[s.id] !== undefined) values[s.id] = stored[s.id];
+    for (const f of declaredFeatures(manifest)) values[featureKey(f)] = stored[featureKey(f)] !== false;
     return values;
   }
 
@@ -175,8 +186,8 @@ export class CodeModuleService {
 
   /** What every active module contributes. Language-only parts are read from languages only. */
   async snapshot(): Promise<ContributionSnapshot> {
-    const snap: ContributionSnapshot = { languages: [], panels: [], commands: [], previews: [], fileTemplates: [], newProject: [], settings: [], buttons: [] };
-    for (const { kind, manifest: m, dir } of await this.active()) {
+    const snap: ContributionSnapshot = { languages: [], panels: [], commands: [], previews: [], fileTemplates: [], newProject: [], settings: [], buttons: [], debuggers: [] };
+    for (const { kind, manifest: m, dir, settings } of await this.active()) {
       const c = m.contributes ?? {};
       const badge = m.badge ?? m.name.slice(0, 2).toUpperCase();
       const icon = iconUrl(dir, m);
@@ -187,16 +198,29 @@ export class CodeModuleService {
       snap.panels.push(...(c.panels ?? []).map((p) => ({ ...p, iconUrl: ownIcon(p.icon), moduleId: m.id })));
       snap.commands.push(...(c.commands ?? []).map((cmd) => ({ ...cmd, moduleId: m.id, moduleName: m.name, badge, icon })));
       snap.buttons.push(...(c.buttons ?? []).map((b) => ({ ...b, iconUrl: ownIcon(b.icon), moduleId: m.id })));
-      if (c.settings?.length) snap.settings.push({ moduleId: m.id, moduleName: m.name, badge, icon, items: c.settings });
+      const lc = kind === 'language' ? ((m as LanguageManifest).contributes ?? {}) : {};
+      const declared = declaredFeatures(m);
+      // A Settings tab for modules with settings, a language server whose features can be switched off,
+      // or previews (whose default view can be chosen).
+      const previews = kind === 'language' ? ((m as LanguageManifest).contributes?.previews ?? []) : [];
+      if (c.settings?.length || declared.length || previews.length) snap.settings.push({ moduleId: m.id, moduleName: m.name, badge, icon, items: c.settings ?? [], features: declared });
       if (kind !== 'language') continue;
-      const lc = (m as LanguageManifest).contributes ?? {};
       const served = new Set(lc.languageServer?.languages ?? []);
-      snap.languages.push(...(lc.languages ?? []).map((l) => ({ ...l, moduleId: m.id, badge, icon, hasServer: served.has(l.id) })));
+      const enabled = declared.filter((f) => settings[featureKey(f)] !== false);
+      snap.languages.push(...(lc.languages ?? []).map((l) => ({
+        ...l, moduleId: m.id, badge, icon, hasServer: served.has(l.id), features: served.has(l.id) ? enabled : [],
+      })));
+      if (lc.debugger) snap.debuggers.push({ moduleId: m.id, label: lc.debugger.label, languages: lc.debugger.languages });
       snap.previews.push(...(lc.previews ?? []).map((p) => ({ ...p, moduleId: m.id })));
       snap.fileTemplates.push(...(lc.fileTemplates ?? []).map((t) => ({ ...t, moduleId: m.id })));
       if (lc.newProject) {
         const languageName = lc.languages?.find((l) => l.id === lc.newProject!.language)?.name ?? m.name;
-        snap.newProject.push({ ...lc.newProject, moduleId: m.id, languageName, badge, icon });
+        // A field default of "${setting:<id>}" shows that module setting's current value.
+        const fields = lc.newProject.fields.map((f) => {
+          const ref = typeof f.default === 'string' ? /^\$\{setting:([\w.-]+)\}$/.exec(f.default) : null;
+          return ref ? { ...f, default: settings[ref[1]] ?? '' } : f;
+        });
+        snap.newProject.push({ ...lc.newProject, fields, moduleId: m.id, languageName, badge, icon });
       }
     }
     return snap;

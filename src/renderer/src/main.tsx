@@ -6,6 +6,7 @@ import { NewProjectScreen } from './screens/NewProjectScreen';
 import { OnboardingScreen } from './screens/OnboardingScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { WelcomeScreen } from './screens/WelcomeScreen';
+import { CredentialPrompt } from './screens/CredentialPrompt';
 import { ThemeApplier } from './theme/ThemeApplier';
 import { followKeymap } from './commands/keymap';
 import './styles.css';
@@ -24,4 +25,5 @@ const screens: Record<WindowKind, ComponentType<any>> = {
 await new ThemeApplier().follow();
 await followKeymap();
 const Screen = screens[window.saturn.window.kind];
-render(<Screen />, document.getElementById('app')!);
+// Any window can be asked for Git credentials (a clone from Welcome, a push from an editor).
+render(<><Screen /><CredentialPrompt /></>, document.getElementById('app')!);

@@ -1,8 +1,9 @@
 import { autocompletion, snippet, type Completion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete';
 import { setDiagnostics, type Diagnostic as CmDiagnostic } from '@codemirror/lint';
-import { Facet, type EditorState, type Extension, type Text } from '@codemirror/state';
-import { EditorView, hoverTooltip, ViewPlugin, type ViewUpdate } from '@codemirror/view';
-import type { CompletionItem, CompletionRequest, Diagnostic, SourceLocation, TextRange } from '@shared/modules';
+import { Facet, StateEffect, StateField, type EditorState, type Extension, type Text } from '@codemirror/state';
+import { EditorView, hoverTooltip, keymap, showPanel, showTooltip, ViewPlugin, type Panel, type Tooltip, type ViewUpdate } from '@codemirror/view';
+import type { CompletionItem, CompletionRequest, Diagnostic, FileEdits, ReferenceLocation, SourceLocation, TextEdit, TextRange } from '@shared/modules';
+import { editorBehaviour } from '@renderer/editor/codemirrorSetup';
 
 const SYNC_DELAY_MS = 300;
 
@@ -11,7 +12,20 @@ export interface LspFile {
   path: string;
   languageId: string;
   openLocation: (location: SourceLocation) => void;
+  /** False when the language's "Error checking" switch is off: its diagnostics are dropped. */
+  diagnostics: boolean;
+  /** Which commands the language's server offers (and the user hasn't switched off). */
+  commands: { references: boolean; rename: boolean; formatting: boolean };
+  /** Shows Find Usages results (in the Usages panel). */
+  showReferences: (symbol: string, list: ReferenceLocation[]) => void;
+  /** Applies edits to open files and files on disk (a rename); resolves to how many files changed. */
+  applyEdits: (files: FileEdits[]) => Promise<number>;
+  /** A message for the status bar. */
+  notify: (text: string, kind?: 'info' | 'error') => void;
 }
+
+/** Files whose language has error checking switched off. */
+const diagnosticsOff = new Set<string>();
 
 const lspFile = Facet.define<LspFile, LspFile | null>({ combine: (values) => values[0] ?? null });
 
@@ -81,6 +95,10 @@ function notifyCounts(): void {
 
 /** A language server published diagnostics for a file: shows them in any editor displaying it. */
 export function receiveDiagnostics(path: string, list: Diagnostic[]): void {
+  if (diagnosticsOff.has(path)) {
+    if (diagnosticsByPath.delete(path)) notifyCounts();
+    return;
+  }
   // Servers often re-send the same results; re-applying them would close an open error popup.
   if (JSON.stringify(diagnosticsByPath.get(path) ?? []) === JSON.stringify(list)) return;
   diagnosticsByPath.set(path, list);
@@ -160,6 +178,164 @@ export function goToDefinition(view: EditorView, pos = view.state.selection.main
   return true;
 }
 
+/** Find Usages for the symbol at the cursor. Returns false if this editor's server doesn't offer it. */
+export function findReferences(view: EditorView): boolean {
+  const file = view.state.facet(lspFile);
+  if (!file?.commands.references) return false;
+  const pos = view.state.selection.main.head;
+  const word = view.state.wordAt(pos);
+  const symbol = word ? view.state.sliceDoc(word.from, word.to) : '';
+  void window.saturn.languages.references(request(view.state, file, pos)).then(
+    (list) => (list.length ? file.showReferences(symbol, list) : file.notify(`No usages of ${symbol || 'this'} found`)),
+    () => file.notify("Couldn't find usages", 'error'),
+  );
+  return true;
+}
+
+/** Applies a server's edits to this editor's text, keeping the cursor where it was relative to the code. */
+function applyToView(view: EditorView, edits: TextEdit[]): void {
+  const changes = edits.map((e) => ({ ...rangeFrom(view.state, e.range), insert: e.newText }));
+  if (changes.length) view.dispatch({ changes, userEvent: 'format' });
+}
+
+/** Formats the whole file with its language server. Resolves false if this editor's server doesn't offer it. */
+export async function formatDocument(view: EditorView): Promise<boolean> {
+  const file = view.state.facet(lspFile);
+  if (!file?.commands.formatting) return false;
+  const before = view.state.doc;
+  const edits = await window.saturn.languages.format({
+    path: file.path,
+    languageId: file.languageId,
+    text: before.toString(),
+    tabSize: editorBehaviour.indentSize,
+    insertSpaces: editorBehaviour.indentWith === 'spaces',
+  }).catch(() => []);
+  // Typing while the server worked would make its edits land in the wrong places.
+  if (view.state.doc !== before) return true;
+  applyToView(view, edits);
+  return true;
+}
+
+const setRename = StateEffect.define<{ pos: number; word: string } | null>();
+
+/** The rename box at the bottom of the editor: "Rename <word> to [new name]". */
+function renamePanel(view: EditorView, target: { pos: number; word: string }): Panel {
+  const dom = document.createElement('div');
+  dom.className = 'cm-saturn-rename';
+  dom.dataset.testid = 'rename-panel';
+  const label = document.createElement('span');
+  label.textContent = `Rename ${target.word} to`;
+  const input = document.createElement('input');
+  input.className = 'cm-textfield';
+  input.value = target.word;
+  input.setAttribute('aria-label', 'New name');
+  const close = () => {
+    view.dispatch({ effects: setRename.of(null) });
+    view.focus();
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+    }
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const newName = input.value.trim();
+    const file = view.state.facet(lspFile);
+    close();
+    if (!file || !newName || newName === target.word) return;
+    void window.saturn.languages.rename({ ...request(view.state, file, target.pos), newName })
+      .then((files) => (files.length ? file.applyEdits(files) : 0))
+      .then((count) => file.notify(count ? `Renamed ${target.word} to ${newName} in ${count} file${count === 1 ? '' : 's'}` : `${target.word} can't be renamed here`))
+      .catch((e: Error) => file.notify(`Couldn't rename ${target.word}: ${e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`, 'error'));
+  });
+  dom.append(label, input);
+  return { dom, mount: () => input.select() };
+}
+
+const renameField = StateField.define<{ pos: number; word: string } | null>({
+  create: () => null,
+  update(value, tr) {
+    for (const e of tr.effects) if (e.is(setRename)) return e.value;
+    return value && tr.docChanged ? { ...value, pos: tr.changes.mapPos(value.pos) } : value;
+  },
+  provide: (f) => showPanel.from(f, (target) => (target ? (view) => renamePanel(view, target) : null)),
+});
+
+/** Opens the rename box for the symbol at the cursor. Returns false if this editor's server doesn't offer rename. */
+export function renameSymbol(view: EditorView): boolean {
+  const file = view.state.facet(lspFile);
+  if (!file?.commands.rename) return false;
+  const pos = view.state.selection.main.head;
+  const word = view.state.wordAt(pos);
+  if (!word) return true;
+  view.dispatch({ effects: setRename.of({ pos, word: view.state.sliceDoc(word.from, word.to) }) });
+  return true;
+}
+
+const setSignature = StateEffect.define<Tooltip | null>();
+
+const signatureField = StateField.define<Tooltip | null>({
+  create: () => null,
+  update(value, tr) {
+    for (const e of tr.effects) if (e.is(setSignature)) return e.value;
+    if (!value) return value;
+    // Leaving the line closes the hints; otherwise they follow the text.
+    const head = tr.state.selection.main.head;
+    if (tr.state.doc.lineAt(head).number !== tr.startState.doc.lineAt(tr.startState.selection.main.head).number) return null;
+    return tr.docChanged ? { ...value, pos: tr.changes.mapPos(value.pos) } : value;
+  },
+  provide: (f) => showTooltip.from(f),
+});
+
+/** Parameter hints: typing ( or , asks the server about the call; ) or Escape closes them. */
+function signatureHelp(file: LspFile): Extension {
+  const ask = (view: EditorView) => {
+    const pos = view.state.selection.main.head;
+    void window.saturn.languages.signatureHelp(request(view.state, file, pos)).then((help) => {
+      if (view.state.selection.main.head !== pos) return;
+      view.dispatch({
+        effects: setSignature.of(help && {
+          pos,
+          above: true,
+          create: () => {
+            const dom = document.createElement('div');
+            dom.className = 'cm-saturn-hover';
+            dom.dataset.testid = 'signature-help';
+            const [start, end] = help.activeParameter ?? [0, 0];
+            const current = document.createElement('strong');
+            current.className = 'cm-saturn-parameter';
+            current.textContent = help.label.slice(start, end);
+            dom.append(help.label.slice(0, start), current, help.label.slice(end));
+            if (help.documentation) {
+              const doc = document.createElement('div');
+              doc.className = 'cm-saturn-signature-doc';
+              doc.textContent = help.documentation;
+              dom.append(doc);
+            }
+            return { dom };
+          },
+        }),
+      });
+    }, () => undefined);
+  };
+  return [
+    signatureField,
+    EditorView.updateListener.of((update) => {
+      if (!update.docChanged) return;
+      for (const tr of update.transactions) {
+        if (!tr.isUserEvent('input.type')) continue;
+        tr.changes.iterChanges((_fa, _ta, _fb, _tb, inserted) => {
+          const typed = inserted.toString();
+          if (typed.includes(')')) queueMicrotask(() => update.view.dispatch({ effects: setSignature.of(null) }));
+          else if (/[(,]/.test(typed)) queueMicrotask(() => ask(update.view));
+        });
+      }
+    }),
+    keymap.of([{ key: 'Escape', run: (view) => (view.state.field(signatureField) ? (view.dispatch({ effects: setSignature.of(null) }), true) : false) }]),
+  ];
+}
+
 /** Keeps the server's copy of the file current, and shows its diagnostics in this editor. */
 const documentSync = ViewPlugin.fromClass(class {
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -169,6 +345,11 @@ const documentSync = ViewPlugin.fromClass(class {
     if (!file) return;
     if (!viewsByPath.has(file.path)) viewsByPath.set(file.path, new Set());
     viewsByPath.get(file.path)!.add(view);
+    if (file.diagnostics) diagnosticsOff.delete(file.path);
+    else {
+      diagnosticsOff.add(file.path);
+      if (diagnosticsByPath.delete(file.path)) notifyCounts();
+    }
     this.send();
     const known = diagnosticsByPath.get(file.path);
     // Applying state during construction isn't allowed, so the saved diagnostics go in on the next tick.
@@ -204,14 +385,16 @@ const clickToDefinition = EditorView.domEventHandlers({
   },
 });
 
-/** Everything a file gets from its language server: sync, diagnostics, completion, hover and go to definition. */
-export function languageServerFeatures(file: LspFile, { completion: withCompletion }: { completion: boolean }): Extension {
+/** What a file gets from its language server: always sync (and diagnostics unless off), plus the features switched on. */
+export function languageServerFeatures(file: LspFile, on: { completion: boolean; hover: boolean; definition: boolean; signatureHelp: boolean }): Extension {
+  // No gutter markers: the line-number column is kept free for breakpoints.
   return [
     lspFile.of(file),
     documentSync,
-    // No gutter markers: the line-number column is kept free for breakpoints.
-    hover(file),
-    clickToDefinition,
-    ...(withCompletion ? [completion(file)] : []),
+    ...(file.commands.rename ? [renameField] : []),
+    ...(on.signatureHelp ? [signatureHelp(file)] : []),
+    ...(on.hover ? [hover(file)] : []),
+    ...(on.definition ? [clickToDefinition] : []),
+    ...(on.completion ? [completion(file)] : []),
   ];
 }

@@ -6,7 +6,7 @@ const REFRESH_DELAY_MS = 300;
 /** The project's Git status, refreshed after Saturn's own Git actions, file changes and when the window regains focus. */
 export function useGitStatus(): [GitStatus | null, () => void] {
   const [status, setStatus] = useState<GitStatus | null>(null);
-  const load = () => void window.saturn.git.status().then(setStatus, () => setStatus({ repo: false, branch: null, upstream: null, ahead: 0, behind: 0, changes: [] }));
+  const load = () => void window.saturn.git.status().then(setStatus, () => setStatus({ repo: false, branch: null, upstream: null, ahead: 0, behind: 0, changes: [], operation: null, conflicts: [] }));
   useEffect(() => {
     load();
     let timer: ReturnType<typeof setTimeout> | undefined;

@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'preact/hooks';
-import { bindingFor, formatBinding, KEYMAP_ACTIONS, KEYMAPS, type KeymapId } from '@shared/keymaps';
+import {
+  bindingFromKeyPress, CUSTOM_PREFIX, formatBinding, KEYMAP_ACTIONS, KEYMAPS, resolveBinding,
+  type CustomKeymap, type KeymapChoice, type KeymapId,
+} from '@shared/keymaps';
 import { MARKETPLACE_INDEX_URL } from '@shared/marketplace';
 import { isMac } from '@renderer/commands/keymap';
-import type { ContributionSnapshot, SettingValue, SettingValues } from '@shared/modules';
-import { FILE_ENCODINGS, TEXT_SIZES, type AppSettings, type FileEncoding, type ThemeSummary } from '@shared/types';
+import { featureKey, LANGUAGE_FEATURES, type ContributionSnapshot, type SettingValue, type SettingValues, type ViewMode } from '@shared/modules';
+import { FILE_ENCODINGS, TEXT_SIZES, type AppSettings, type FileEncoding, type ThemeSummary, type UpdateStatus } from '@shared/types';
 import { Button, FieldInput, ModuleIcon, FormField, Heading, RadioList, SegmentedControl, Select, SidebarMenu, TabMenu, TextInput, Toggle } from '@renderer/components';
 import { ModeToggle } from '@renderer/theme/ModeToggle';
 
 /** Built-in sections, then one per module that declares settings ("module:<id>"). */
-type Section = 'appearance' | 'editor' | 'keymap' | 'marketplace' | `module:${string}`;
+type Section = 'appearance' | 'editor' | 'languages' | 'keymap' | 'marketplace' | 'advanced' | `module:${string}`;
 
 /** Light/Dark mode (or Sync with OS), the active theme and text size. Also shown on the Welcome screen. */
 export function AppearanceSection() {
@@ -142,6 +145,14 @@ function BehaviourSection() {
           />
         </div>
       )}
+      <div class="flex items-center gap-3 mb-3">
+        <span class="flex-1">Auto-close brackets and quotes ( [ {'{'} &lt; ' ")</span>
+        <Toggle on={settings.autoCloseBrackets} label={settings.autoCloseBrackets ? 'Turn off auto-closing' : 'Turn on auto-closing'} onChange={(on) => update({ autoCloseBrackets: on })} />
+      </div>
+      <div class="flex items-center gap-3 mb-3">
+        <span class="flex-1">Format on save (languages that support formatting)</span>
+        <Toggle on={settings.formatOnSave} label={settings.formatOnSave ? 'Turn off format on save' : 'Turn on format on save'} onChange={(on) => update({ formatOnSave: on })} />
+      </div>
       <Heading class="mt-5">Auto-save</Heading>
       <div class="mb-1">
         <SegmentedControl
@@ -165,10 +176,52 @@ function BehaviourSection() {
         <span class="flex-1">Read and save files as</span>
         <Select<FileEncoding> value={settings.encoding} options={FILE_ENCODINGS.map((e) => ({ value: e.id, label: e.id === 'utf-8' ? `${e.label} (default)` : e.label }))} onChange={(encoding) => update({ encoding })} />
       </div>
-      <Heading class="mt-5">Reset Saturn</Heading>
+    </section>
+  );
+}
+
+/** What the update status means, in words. */
+function updateText(s: UpdateStatus): string {
+  switch (s.state) {
+    case 'unavailable': return 'Updates are only available in installed builds of Saturn.';
+    case 'checking': return 'Checking for updates…';
+    case 'up-to-date': return `Saturn ${__SATURN_VERSION__} is up to date.`;
+    case 'downloading': return `Downloading Saturn ${s.version ?? ''}… ${s.percent ?? 0}%`;
+    case 'ready': return `Saturn ${s.version} is ready. Restart to install it.`;
+    case 'available': return `Saturn ${s.version} is available. This copy can't update itself, so download it and replace the app.`;
+    case 'error': return `Couldn't check for updates: ${s.message}`;
+    default: return `You're on Saturn ${__SATURN_VERSION__}.`;
+  }
+}
+
+/** Settings → Advanced: Saturn updates, and Reset Saturn. */
+function AdvancedSection() {
+  const settings = useAppSettings();
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  useEffect(() => {
+    void window.saturn.updates.status().then(setStatus);
+    return window.saturn.updates.onChanged(setStatus);
+  }, []);
+  if (!settings || !status) return null;
+  const busy = status.state === 'checking' || status.state === 'downloading';
+
+  return (
+    <section>
+      <Heading>Updates</Heading>
+      <div class="flex items-center gap-3 mb-3">
+        <span class="flex-1">Check for updates automatically (Saturn, and installed languages, extensions and themes)</span>
+        <Toggle on={settings.autoUpdate} label={settings.autoUpdate ? 'Turn off automatic updates' : 'Turn on automatic updates'} onChange={(on) => void window.saturn.settings.update({ autoUpdate: on })} />
+      </div>
+      <p class="mt-0 mb-2.5 text-muted" data-testid="update-status">{updateText(status)}</p>
+      <div class="flex gap-2 mb-5">
+        {status.state === 'ready' && <Button variant="primary" testId="update-install" onClick={() => void window.saturn.updates.install()}>Restart to update</Button>}
+        {status.state === 'available' && <Button variant="primary" testId="update-download" onClick={() => void window.saturn.updates.install()}>Download</Button>}
+        {status.state !== 'ready' && <Button testId="update-check" disabled={busy || status.state === 'unavailable'} onClick={() => void window.saturn.updates.check()}>Check for updates</Button>}
+      </div>
+      <Heading>Reset Saturn</Heading>
       <p class="mt-0 mb-2.5 text-muted">
-        Removes all settings, installed languages, extensions and themes, and the recent projects list, then restarts
-        Saturn as new. Your project folders on disk are not touched. You'll be asked to confirm.
+        Removes all settings, installed languages, extensions and themes, and the recent projects list, then starts
+        Saturn over as new. Open windows close without saving. Your project folders on disk are not touched. You'll be asked to confirm.
       </p>
       <Button testId="reset-saturn" onClick={() => void window.saturn.app.reset()}>Reset Saturn…</Button>
     </section>
@@ -176,22 +229,99 @@ function BehaviourSection() {
 }
 
 /** Choose a keymap and see its shortcuts. */
+/**
+ * Choose a keymap and see its shortcuts. "Duplicate…" makes a custom keymap from the selected one; a
+ * custom keymap's shortcuts can be changed (click, then press the keys), cleared, or reset to its base.
+ */
 function KeymapSection() {
   const settings = useAppSettings();
+  const [naming, setNaming] = useState<string | null>(null);
+  const [recording, setRecording] = useState<string | null>(null);
   if (!settings) return null;
+
+  const customs = settings.customKeymaps;
+  const selectedCustom = customs.find((c) => `${CUSTOM_PREFIX}${c.id}` === settings.keymap);
+  const baseOf = (choice: KeymapChoice): KeymapId => (choice.startsWith(CUSTOM_PREFIX) ? (selectedCustom?.base ?? 'os') : (choice as KeymapId));
+  const update = (change: Partial<AppSettings>) => void window.saturn.settings.update(change);
+  const saveCustom = (next: CustomKeymap) => update({ customKeymaps: customs.map((c) => (c.id === next.id ? next : c)) });
+
+  const duplicate = (name: string) => {
+    const id = `${Date.now().toString(36)}`;
+    // A copy of a custom keymap keeps its changes; a copy of a built-in one starts with none.
+    const copy: CustomKeymap = { id, name: name.trim(), base: baseOf(settings.keymap), bindings: { ...(selectedCustom?.bindings ?? {}) } };
+    update({ customKeymaps: [...customs, copy], keymap: `${CUSTOM_PREFIX}${id}` });
+    setNaming(null);
+  };
+
+  const options = [
+    ...KEYMAPS.map((k) => ({ value: k.id as KeymapChoice, label: k.label })),
+    ...customs.map((c) => ({ value: `${CUSTOM_PREFIX}${c.id}` as KeymapChoice, label: `${c.name} (custom)` })),
+  ];
+
   return (
     <section>
       <Heading>Keymap</Heading>
-      <div class="mb-5">
-        <Select<KeymapId> value={settings.keymap} options={KEYMAPS.map((k) => ({ value: k.id, label: k.label }))} onChange={(keymap) => void window.saturn.settings.update({ keymap })} />
+      <div class="flex items-center gap-2 mb-2">
+        <Select<KeymapChoice> value={settings.keymap} options={options} onChange={(keymap) => update({ keymap })} />
+        <Button testId="keymap-duplicate" onClick={() => setNaming(`${options.find((o) => o.value === settings.keymap)?.label.replace(/ \(custom\)$/, '') ?? 'Keymap'} copy`)}>Duplicate…</Button>
+        {selectedCustom && <Button testId="keymap-delete" onClick={() => update({ customKeymaps: customs.filter((c) => c.id !== selectedCustom.id) })}>Delete</Button>}
       </div>
+      {naming !== null && (
+        <div class="flex items-center gap-2 mb-2">
+          <TextInput value={naming} onInput={setNaming} placeholder="Keymap name" testId="keymap-name" autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && naming.trim()) duplicate(naming);
+              if (e.key === 'Escape') setNaming(null);
+            }}
+          />
+          <Button variant="primary" disabled={!naming.trim()} onClick={() => duplicate(naming)}>Create</Button>
+          <Button onClick={() => setNaming(null)}>Cancel</Button>
+        </div>
+      )}
+      <p class="mt-0 mb-5 text-muted text-[11px]">
+        {selectedCustom ? `Based on ${KEYMAPS.find((k) => k.id === selectedCustom.base)?.label}. Click a shortcut, then press the new keys.` : 'Duplicate a keymap to change its shortcuts.'}
+      </p>
       <Heading>Shortcuts</Heading>
       {KEYMAP_ACTIONS.map((a) => {
-        const binding = bindingFor(a.id, settings.keymap, isMac);
+        const binding = resolveBinding(a.id, settings.keymap, customs, isMac);
+        const changed = !!selectedCustom && a.id in selectedCustom.bindings;
+        const set = (value: string | null | undefined) => {
+          if (!selectedCustom) return;
+          const bindings = { ...selectedCustom.bindings };
+          if (value === undefined) delete bindings[a.id];
+          else bindings[a.id] = value;
+          saveCustom({ ...selectedCustom, bindings });
+        };
         return (
-          <div key={a.id} class="flex gap-3 py-1 border-b border-divider" data-testid={`shortcut-${a.id}`}>
-            <span class="flex-1">{a.title}</span>
-            <span class={binding ? 'text-strong font-mono' : 'text-muted'}>{binding ? formatBinding(binding, isMac) : 'None'}</span>
+          <div key={a.id} class="flex items-center gap-3 py-1 border-b border-divider" data-testid={`shortcut-${a.id}`}>
+            <span class="flex-1">{a.title}{changed && <span class="text-muted"> (changed)</span>}</span>
+            {selectedCustom ? (
+              <>
+                <button
+                  type="button"
+                  data-testid={`shortcut-record-${a.id}`}
+                  class={`min-w-28 h-6 px-2 border text-right font-mono ${recording === a.id ? 'border-accent text-accent' : 'border-border hover:bg-hover'} ${binding ? 'text-strong' : 'text-muted'}`}
+                  onClick={() => setRecording(recording === a.id ? null : a.id)}
+                  onBlur={() => recording === a.id && setRecording(null)}
+                  onKeyDown={(e) => {
+                    if (recording !== a.id) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (e.key === 'Escape') return setRecording(null);
+                    const recorded = bindingFromKeyPress(e, isMac);
+                    if (!recorded) return;
+                    set(recorded);
+                    setRecording(null);
+                  }}
+                >
+                  {recording === a.id ? 'Press keys…' : binding ? formatBinding(binding, isMac) : 'None'}
+                </button>
+                <Button onClick={() => set(null)} disabled={!binding}>Clear</Button>
+                <Button onClick={() => set(undefined)} disabled={!changed}>Reset</Button>
+              </>
+            ) : (
+              <span class={binding ? 'text-strong font-mono' : 'text-muted'}>{binding ? formatBinding(binding, isMac) : 'None'}</span>
+            )}
           </div>
         );
       })}
@@ -236,6 +366,13 @@ type ModuleTab = ContributionSnapshot['settings'][number];
 
 /** A module's own settings tab, e.g. Java's JAR location. Typed text saves when the field loses focus. */
 function ModuleSection({ tab }: { tab: ModuleTab }) {
+  const settings = useAppSettings();
+  const [previews, setPreviews] = useState<ContributionSnapshot['previews']>([]);
+  useEffect(() => {
+    const read = (s: ContributionSnapshot) => setPreviews(s.previews.filter((p) => p.moduleId === tab.moduleId));
+    void window.saturn.modules.snapshot().then(read);
+    return window.saturn.modules.onChanged(read);
+  }, [tab.moduleId]);
   const [values, setValues] = useState<SettingValues | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -251,7 +388,7 @@ function ModuleSection({ tab }: { tab: ModuleTab }) {
 
   return (
     <section data-testid={`module-settings-${tab.moduleId}`}>
-      <Heading>{tab.moduleName}</Heading>
+      {tab.items.length > 0 && <Heading>{tab.moduleName}</Heading>}
       {tab.items.map((s) => (
         <div key={s.id} class="mb-3">
           <FormField label={s.label}>
@@ -260,12 +397,65 @@ function ModuleSection({ tab }: { tab: ModuleTab }) {
           {s.description && <p class="-mt-1.5 mb-0 ml-[152px] text-muted text-[11px]">{s.description}</p>}
         </div>
       ))}
+      {previews.length > 0 && settings && (
+        <>
+          {/* How each previewable file type opens; the language suggests one, the user can change it. */}
+          <Heading class={tab.items.length ? 'mt-5' : ''}>Default view</Heading>
+          {previews.map((p) => (
+            <div key={p.id} class="flex items-center gap-3 mb-2" data-testid={`default-view-${p.id}`}>
+              <span class="flex-1">{p.label} <span class="text-muted">({p.extensions.join(', ')})</span></span>
+              <div class="w-72">
+                <SegmentedControl<ViewMode>
+                  label={`${p.label} default view`}
+                  value={settings.defaultViews[p.id] ?? p.defaultView ?? 'code'}
+                  onChange={(view) => void window.saturn.settings.update({ defaultViews: { ...settings.defaultViews, [p.id]: view } })}
+                  options={[{ id: 'code', label: 'Code' }, { id: 'split', label: 'Split' }, { id: 'preview', label: 'Preview' }]}
+                />
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+      {tab.features.length > 0 && (
+        <>
+          {/* Every feature, last on the tab: ones the server offers can be switched off for this language; the rest say so. */}
+          <Heading class={tab.items.length || previews.length ? 'mt-5' : ''}>Language features</Heading>
+          {LANGUAGE_FEATURES.map((f) => {
+            const supported = tab.features.includes(f.id);
+            const on = values[featureKey(f.id)] !== false;
+            return (
+              <div key={f.id} class="flex items-center gap-3 mb-2 min-h-5" data-testid={`feature-${f.id}`}>
+                <span class={`flex-1 ${supported ? '' : 'text-muted'}`}>{f.label}</span>
+                {supported
+                  ? <Toggle on={on} label={on ? `Turn off ${f.label.toLowerCase()}` : `Turn on ${f.label.toLowerCase()}`} onChange={(next) => save(featureKey(f.id), next)} />
+                  : <span class="text-muted">Not supported</span>}
+              </div>
+            );
+          })}
+        </>
+      )}
       {error && <p class="mt-1.5 mb-0 text-accent" role="alert">{error}</p>}
     </section>
   );
 }
 
 const MODULE_PREFIX = 'module:';
+
+/** Settings → Languages: a tab per installed language with settings or language features. */
+function LanguagesSection({ tabs, selected, onSelect }: { tabs: ModuleTab[]; selected: string | null; onSelect: (id: string) => void }) {
+  if (tabs.length === 0) return <p class="m-0 text-muted">None.</p>;
+  const tab = tabs.find((t) => t.moduleId === selected) ?? tabs[0];
+  return (
+    <div class="-m-4 flex flex-col" data-testid="settings-languages">
+      <TabMenu<string>
+        tabs={tabs.map((t) => ({ id: t.moduleId, label: t.moduleName, icon: <ModuleIcon icon={t.icon} badge={t.badge} /> }))}
+        active={tab.moduleId}
+        onSelect={onSelect}
+      />
+      <div class="p-4"><ModuleSection key={tab.moduleId} tab={tab} /></div>
+    </div>
+  );
+}
 
 /**
  * Settings: a sidebar of sections in its own window, or a row of tabs when `embedded` in the Welcome
@@ -274,20 +464,39 @@ const MODULE_PREFIX = 'module:';
 export function SettingsScreen({ embedded = false }: { embedded?: boolean }) {
   // A Settings window can be opened on a section, e.g. a module's tab from a notification.
   const requested = embedded ? null : window.saturn.window.section;
-  const [section, setSection] = useState<Section>(requested && /^(appearance|editor|keymap|marketplace|module:.+)$/.test(requested) ? (requested as Section) : 'appearance');
+  const [section, setSection] = useState<Section>(requested && /^(appearance|editor|languages|keymap|marketplace|advanced|module:.+)$/.test(requested) ? (requested as Section) : 'appearance');
   const [moduleTabs, setModuleTabs] = useState<ModuleTab[]>([]);
   useEffect(() => {
     void window.saturn.modules.snapshot().then((s) => setModuleTabs(s.settings));
     return window.saturn.modules.onChanged((s) => setModuleTabs(s.settings));
   }, []);
-  const moduleTab = moduleTabs.find((t) => section === `${MODULE_PREFIX}${t.moduleId}`);
+  // Languages share one Languages section (a tab each inside it); extensions get their own sections.
+  const [languageIds, setLanguageIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    const read = (s: ContributionSnapshot) => setLanguageIds(new Set(s.languages.map((l) => l.moduleId)));
+    void window.saturn.modules.snapshot().then(read);
+    return window.saturn.modules.onChanged(read);
+  }, []);
+  const languageTabs = moduleTabs.filter((t) => languageIds.has(t.moduleId));
+  const extensionTabs = moduleTabs.filter((t) => !languageIds.has(t.moduleId));
+  // A request for a language's own tab ("module:<id>") opens Languages on it.
+  const [languageId, setLanguageId] = useState<string | null>(null);
+  const requestedLanguage = section.startsWith(MODULE_PREFIX) ? languageTabs.find((t) => section === `${MODULE_PREFIX}${t.moduleId}`) : undefined;
+  useEffect(() => {
+    if (!requestedLanguage) return;
+    setLanguageId(requestedLanguage.moduleId);
+    setSection('languages');
+  }, [requestedLanguage?.moduleId]);
+  const moduleTab = extensionTabs.find((t) => section === `${MODULE_PREFIX}${t.moduleId}`);
   const sections = [
     { id: 'appearance' as Section, label: 'Appearance' },
     { id: 'editor' as Section, label: 'Editor' },
+    { id: 'languages' as Section, label: 'Languages' },
     { id: 'keymap' as Section, label: 'Keymap' },
     { id: 'marketplace' as Section, label: 'Marketplace' },
-    // Tabs added by installed languages and extensions, below a divider.
-    ...moduleTabs.map((t, i) => ({
+    { id: 'advanced' as Section, label: 'Advanced' },
+    // Tabs added by installed extensions, below a divider.
+    ...extensionTabs.map((t, i) => ({
       id: `${MODULE_PREFIX}${t.moduleId}` as Section,
       label: t.moduleName,
       icon: <ModuleIcon icon={t.icon} badge={t.badge} />,
@@ -303,8 +512,10 @@ export function SettingsScreen({ embedded = false }: { embedded?: boolean }) {
         <main class="flex-1 p-4 overflow-y-auto">
           {section === 'appearance' && <AppearanceSection />}
           {section === 'editor' && <EditorSection />}
+          {section === 'languages' && <LanguagesSection tabs={languageTabs} selected={languageId} onSelect={setLanguageId} />}
           {section === 'keymap' && <KeymapSection />}
           {section === 'marketplace' && <MarketplaceSection />}
+          {section === 'advanced' && <AdvancedSection />}
           {moduleTab && <ModuleSection key={moduleTab.moduleId} tab={moduleTab} />}
         </main>
       </div>

@@ -57,6 +57,34 @@ export const KEYMAP_ACTIONS: KeymapAction[] = [
     bindings: { os: 'Ctrl-Shift-`', vscode: 'Ctrl-Shift-`' },
   },
   {
+    id: 'core.startDebugging', title: 'Start Debugging / Continue', scope: 'app',
+    bindings: { os: 'F5', intellij: { mac: 'Ctrl-d', other: 'Shift-F9' }, visualstudio: 'F5', vscode: 'F5' },
+  },
+  {
+    id: 'core.stopDebugging', title: 'Stop Debugging', scope: 'app',
+    bindings: { os: 'Shift-F5', intellij: 'Mod-F2', visualstudio: 'Shift-F5', vscode: 'Shift-F5' },
+  },
+  {
+    id: 'core.stepOver', title: 'Step Over', scope: 'app',
+    bindings: { os: 'F10', intellij: 'F8', visualstudio: 'F10', vscode: 'F10' },
+  },
+  {
+    id: 'core.stepInto', title: 'Step Into', scope: 'app',
+    bindings: { os: 'F11', intellij: 'F7', visualstudio: 'F11', vscode: 'F11' },
+  },
+  {
+    id: 'core.stepOut', title: 'Step Out', scope: 'app',
+    bindings: { os: 'Shift-F11', intellij: 'Shift-F8', visualstudio: 'Shift-F11', vscode: 'Shift-F11' },
+  },
+  {
+    id: 'core.splitEditor', title: 'Split Editor', scope: 'app',
+    bindings: { os: 'Mod-\\', vscode: 'Mod-\\' },
+  },
+  {
+    id: 'editor.toggleBreakpoint', title: 'Toggle Breakpoint', scope: 'editor',
+    bindings: { os: 'F9', intellij: 'Mod-F8', visualstudio: 'F9', vscode: 'F9' },
+  },
+  {
     id: 'editor.find', title: 'Find', scope: 'editor',
     bindings: { os: 'Mod-f', intellij: 'Mod-f', visualstudio: 'Ctrl-f', vscode: 'Mod-f' },
   },
@@ -71,6 +99,18 @@ export const KEYMAP_ACTIONS: KeymapAction[] = [
   {
     id: 'editor.gotoDefinition', title: 'Go to Definition', scope: 'editor',
     bindings: { os: 'F12', intellij: 'Mod-b', visualstudio: 'F12', vscode: 'F12' },
+  },
+  {
+    id: 'editor.findReferences', title: 'Find Usages', scope: 'editor',
+    bindings: { os: 'Shift-F12', intellij: 'Alt-F7', visualstudio: 'Shift-F12', vscode: 'Shift-F12' },
+  },
+  {
+    id: 'editor.rename', title: 'Rename Symbol', scope: 'editor',
+    bindings: { os: 'F2', intellij: 'Shift-F6', visualstudio: 'F2', vscode: 'F2' },
+  },
+  {
+    id: 'editor.formatDocument', title: 'Format Document', scope: 'editor',
+    bindings: { os: 'Shift-Alt-f', intellij: 'Mod-Alt-l', visualstudio: 'Ctrl-Shift-f', vscode: 'Shift-Alt-f' },
   },
   {
     id: 'editor.duplicateLine', title: 'Duplicate Line', scope: 'editor',
@@ -90,11 +130,56 @@ export const KEYMAP_ACTIONS: KeymapAction[] = [
   },
 ];
 
-/** The key for an action in a keymap on this platform, or null if it has none. */
+/**
+ * A user's own keymap: a copy of a built-in one with some shortcuts changed. `bindings` holds only the
+ * changes; a null value means "no shortcut" for that action.
+ */
+export interface CustomKeymap {
+  id: string;
+  name: string;
+  base: KeymapId;
+  bindings: Record<string, string | null>;
+}
+
+/** The selected keymap: a built-in id, or "custom:<id>" for one of the user's own. */
+export type KeymapChoice = KeymapId | `custom:${string}`;
+
+export const CUSTOM_PREFIX = 'custom:';
+
+/** The key for an action in a built-in keymap on this platform, or null if it has none. */
 export function bindingFor(actionId: string, keymap: KeymapId, isMac: boolean): string | null {
   const binding = KEYMAP_ACTIONS.find((a) => a.id === actionId)?.bindings[keymap];
   if (!binding) return null;
   return typeof binding === 'string' ? binding : isMac ? binding.mac : binding.other;
+}
+
+/** The key for an action in the selected keymap (built-in or custom), or null if it has none. */
+export function resolveBinding(actionId: string, choice: string, customs: CustomKeymap[], isMac: boolean): string | null {
+  if (!choice.startsWith(CUSTOM_PREFIX)) return bindingFor(actionId, choice as KeymapId, isMac);
+  const custom = customs.find((c) => `${CUSTOM_PREFIX}${c.id}` === choice);
+  if (!custom) return bindingFor(actionId, 'os', isMac);
+  return actionId in custom.bindings ? custom.bindings[actionId] : bindingFor(actionId, custom.base, isMac);
+}
+
+const CODE_KEYS: Record<string, string> = { Backquote: '`', Comma: ',', Period: '.', Slash: '/', Semicolon: ';', Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']', Backslash: '\\', Quote: "'" };
+
+/**
+ * A key press as a binding ("Mod-Shift-k"), for recording a custom shortcut. Null for a lone modifier
+ * key. Printable keys use the physical key, so Shift and Alt don't change them.
+ */
+export function bindingFromKeyPress(e: KeyPress, isMac: boolean): string | null {
+  if (['Meta', 'Control', 'Alt', 'Shift'].includes(e.key)) return null;
+  let key = e.key;
+  if (/^Key[A-Z]$/.test(e.code)) key = e.code.slice(3).toLowerCase();
+  else if (/^Digit\d$/.test(e.code)) key = e.code.slice(5);
+  else if (CODE_KEYS[e.code]) key = CODE_KEYS[e.code];
+  const mods = [
+    (isMac ? e.metaKey : e.ctrlKey) && 'Mod',
+    isMac && e.ctrlKey && 'Ctrl',
+    e.altKey && 'Alt',
+    e.shiftKey && 'Shift',
+  ].filter(Boolean);
+  return [...mods, key].join('-');
 }
 
 const MAC_SYMBOLS: Record<string, string> = { Mod: '⌘', Ctrl: '⌃', Alt: '⌥', Shift: '⇧' };
@@ -129,7 +214,7 @@ export function matchesBinding(e: KeyPress, binding: string, isMac: boolean): bo
   if (e.ctrlKey !== ctrl || e.metaKey !== meta || e.altKey !== want.has('Alt') || e.shiftKey !== want.has('Shift')) return false;
   if (/^[a-z]$/i.test(key)) return e.code === `Key${key.toUpperCase()}`;
   if (/^[0-9]$/.test(key)) return e.code === `Digit${key}`;
-  const codes: Record<string, string> = { '`': 'Backquote', ',': 'Comma', '.': 'Period', '/': 'Slash', ';': 'Semicolon' };
-  if (codes[key]) return e.code === codes[key];
+  const code = Object.entries(CODE_KEYS).find(([, k]) => k === key)?.[0];
+  if (code) return e.code === code;
   return e.key === key;
 }

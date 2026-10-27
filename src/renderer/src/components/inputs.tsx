@@ -13,12 +13,17 @@ interface TextInputProps {
   onFocus?: () => void;
   onBlur?: () => void;
   autoFocus?: boolean;
+  /** Hides what's typed (passwords, tokens). */
+  secret?: boolean;
 }
 
-export function TextInput({ value, onInput, placeholder, testId, class: cls = '', inputRef, onKeyDown, onFocus, onBlur, autoFocus }: TextInputProps) {
+export function TextInput({ value, onInput, placeholder, testId, class: cls = '', inputRef, onKeyDown, onFocus, onBlur, autoFocus, secret }: TextInputProps) {
+  // Preact's input types pair each `type` with its own attributes; a plain string keeps one element for both.
+  const type: string = secret ? 'password' : 'text';
   return (
     <input
       ref={inputRef}
+      type={type as 'text'}
       class={`${FIELD} select-text ${cls}`}
       value={value}
       placeholder={placeholder}

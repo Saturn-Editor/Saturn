@@ -93,6 +93,11 @@ export class ExtensionHostService {
     void this.ready.then(() => this.rpc?.notify('filesChanged', projectPath, dir));
   }
 
+  /** A project opened in an editor window (modules listen with `saturn.projects.onDidOpen`). */
+  projectOpened(projectPath: string): void {
+    void this.ready.then(() => this.rpc?.notify('projectOpened', projectPath));
+  }
+
   /** A project's editor window closed (modules listen with `saturn.projects.onDidClose`). */
   projectClosed(projectPath: string): void {
     void this.ready.then(() => this.rpc?.notify('projectClosed', projectPath));
