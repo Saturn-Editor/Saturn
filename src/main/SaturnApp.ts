@@ -77,7 +77,9 @@ export class SaturnApp {
 
   async start(): Promise<void> {
     await app.whenReady();
-    app.dock?.setIcon(join(app.getAppPath(), 'resources/icons/icon.png'));
+    // In development the Dock would show Electron's icon, so it's replaced with ours (a PNG: keep it in
+    // step with icon.icns). Packaged builds use icon.icns from the app bundle and are left alone.
+    if (!app.isPackaged) app.dock?.setIcon(join(app.getAppPath(), 'resources/icons/icon.png'));
     setUpAppMenu();
     const paths = new AppPaths(app.getPath('userData'));
     const settings = new SettingsStore(paths.file('settings.json'));
