@@ -105,13 +105,11 @@ export interface NewProjectField {
   when?: { template?: string[]; tab?: string[] };
 }
 
-/** One project template in a New Project tab, e.g. "Console App". */
+/** One project template in a New Project tab's Template dropdown, e.g. "Console App"; the description shows under it. */
 export interface NewProjectTemplate {
   id: string;
   label: string;
   description?: string;
-  /** An .svg or .png file in the module folder, as for panel icons. */
-  icon?: string;
 }
 
 /** A tab of templates along the top of the language's New Project page, e.g. ".NET" or "Web". */

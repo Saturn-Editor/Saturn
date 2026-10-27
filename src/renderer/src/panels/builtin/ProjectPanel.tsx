@@ -203,11 +203,19 @@ export function ProjectPanel() {
     if (action === 'new') setMenu({ ...menu, mode: 'new' });
     if (action === 'open') void ws.documents.open(entry.path);
     if (action === 'rename') setRenaming(entry.path);
+    // Deleting doesn't ask; Undo brings it back for 30 seconds (then it's in the system Trash).
     if (action === 'delete') {
-      void window.saturn.fs.trash(entry.path).then((done) => {
-        if (!done) return;
+      void window.saturn.fs.trash(entry.path).then((id) => {
         ws.documents.closeUnder(entry.path);
         void load(parentOf(entry.path));
+        ws.undo.value = {
+          text: `Deleted ${entry.name}`,
+          at: Date.now(),
+          run: async () => {
+            await window.saturn.fs.undoTrash(id);
+            void load(parentOf(entry.path));
+          },
+        };
       }, report);
     }
     if (action === 'copy-path') void navigator.clipboard.writeText(entry.path);

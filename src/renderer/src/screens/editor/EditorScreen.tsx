@@ -7,6 +7,7 @@ import { EditorArea } from './EditorArea';
 import { EditorWorkspace, WorkspaceContext } from './EditorWorkspace';
 import { BranchSwitchPrompt } from './BranchSwitchPrompt';
 import { StatusBar } from './StatusBar';
+import { UndoToast } from './UndoToast';
 import { TopBar } from './TopBar';
 
 export function EditorScreen() {
@@ -51,6 +52,7 @@ export function EditorScreen() {
         </div>
         <StatusBar />
         <BranchSwitchPrompt />
+        <UndoToast />
       </div>
     </WorkspaceContext.Provider>
   );
