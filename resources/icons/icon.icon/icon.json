@@ -1,7 +1,9 @@
 {
   "fill-specializations" : [
     {
-      "value" : "system-light"
+      "value" : {
+        "automatic-gradient" : "gray:0.15298,1.00000"
+      }
     },
     {
       "appearance" : "dark",
