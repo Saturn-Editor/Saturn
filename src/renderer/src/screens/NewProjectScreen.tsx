@@ -4,6 +4,7 @@ import {
   Badge, Button, Checkbox, DialogFooter, FieldInput, ModuleIcon, FormField, Heading, Select, SidebarFooterButton, SidebarMenu, TabMenu, TextInput, TitleBar,
 } from '@renderer/components';
 import { EMPTY_SNAPSHOT } from '@renderer/modules/ModuleBridge';
+import { CloneForm } from './WelcomeScreen';
 
 const PLAIN_TEXT = 'plain-text';
 
@@ -60,6 +61,11 @@ export function NewProjectScreen() {
   const opener = window.saturn.window.projectPath;
   const openerName = opener?.split(/[\\/]/).pop();
   const [choosing, setChoosing] = useState(false);
+  const [cloning, setCloning] = useState(false);
+  // Opening or cloning instead of creating: the project opens in its own window and this one closes.
+  const openExisting = async () => {
+    if (await window.saturn.projects.openDialog()) window.saturn.window.close();
+  };
 
   const create = async (replace = false) => {
     setChoosing(false);
@@ -117,6 +123,7 @@ export function NewProjectScreen() {
             </>
           )}
           <div class="p-4">
+            {cloning && <CloneForm onCancel={() => setCloning(false)} onCloned={() => window.saturn.window.close()} />}
             <Heading>Project</Heading>
             <FormField label="Name">
               <TextInput value={name} onInput={setName} testId="new-name" />
@@ -146,7 +153,9 @@ export function NewProjectScreen() {
         </main>
       </div>
       <DialogFooter>
-        {busy && <span class="flex-1 truncate text-muted" data-testid="new-progress">{progress ?? 'Creating…'}</span>}
+        <Button testId="new-open" disabled={busy} onClick={() => void openExisting()}>Open…</Button>
+        <Button testId="new-clone" disabled={busy} onClick={() => setCloning(!cloning)}>Clone…</Button>
+        {busy ? <span class="flex-1 truncate text-muted" data-testid="new-progress">{progress ?? 'Creating…'}</span> : <span class="flex-1" />}
         <Button onClick={() => window.saturn.window.close()}>Cancel</Button>
         <Button
           variant="primary"

@@ -307,6 +307,8 @@ function EditorPane({ group }: { group: number }) {
   // The view picked for this tab, else the user's default for its file type, else the language's.
   const mode: ViewMode = provider && activeDoc ? (modes[activeDoc.path] ?? ws.defaultViews.value[provider.id] ?? provider.defaultView ?? 'code') : 'code';
   const setMode = (m: ViewMode) => activeDoc && setModes({ ...modes, [activeDoc.path]: m });
+  // A file that can't be opened as text (binary or too large) still shows if a preview claims it, e.g. images.
+  const infoProvider = activeInfo && activeInfo.reason !== 'diff' ? ws.previews.for(activeInfo.path) : undefined;
 
   const modeButtons = provider && (
     <>
@@ -393,7 +395,10 @@ function EditorPane({ group }: { group: number }) {
             <PreviewPane provider={provider} text={activeDoc.text} path={activeDoc.path} projectPath={ws.projectPath} />
           </div>
         )}
-        {activeInfo && <div class="flex-1 min-w-0"><InfoView info={activeInfo} /></div>}
+        {activeInfo && (infoProvider ? (
+          // No text to edit, so preview only; the provider reads the file from its path.
+          <div class="flex-1 min-w-0"><PreviewPane provider={infoProvider} text="" path={activeInfo.path} projectPath={ws.projectPath} /></div>
+        ) : <div class="flex-1 min-w-0"><InfoView info={activeInfo} /></div>)}
         {!activeDoc && !activeInfo && (
           <div class="flex-1 flex items-center justify-center text-muted">Open a file from the Project panel.</div>
         )}

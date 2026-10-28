@@ -404,7 +404,9 @@ export class IpcRouter {
     });
     this.handle('projects', 'openDialog', async (e) => {
       const result = await dialog.showOpenDialog(this.senderWindow(e), { properties: ['openDirectory', 'createDirectory'] });
-      if (!result.canceled && result.filePaths[0]) await openProject(result.filePaths[0]);
+      if (result.canceled || !result.filePaths[0]) return false;
+      await openProject(result.filePaths[0]);
+      return true;
     });
     this.handle('projects', 'pickFolder', async (e) => {
       const result = await dialog.showOpenDialog(this.senderWindow(e), { properties: ['openDirectory', 'createDirectory'] });

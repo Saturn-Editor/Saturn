@@ -248,7 +248,8 @@ export interface SaturnApi {
   };
   projects: {
     recent(): Promise<RecentProject[]>;
-    openDialog(): Promise<void>;
+    /** True once a project was picked and opened; false if the dialog was cancelled. */
+    openDialog(): Promise<boolean>;
     openPath(path: string): Promise<'opened' | 'missing'>;
     removeRecent(path: string): Promise<void>;
     /** Moves a recent project's folder to the Trash and forgets it (callers confirm first). Rejects while it's open. */
