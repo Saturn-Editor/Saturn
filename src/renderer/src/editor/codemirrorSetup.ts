@@ -48,7 +48,8 @@ const saturnTheme = EditorView.theme({
   '.cm-gutters': { backgroundColor: 'var(--saturn-editor)', color: 'var(--saturn-muted)', border: 'none' },
   '.cm-activeLine': { backgroundColor: 'var(--saturn-hover)' },
   '.cm-activeLineGutter': { backgroundColor: 'var(--saturn-hover)', color: 'var(--saturn-strong)' },
-  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'var(--saturn-selection)' },
+  // As specific as CodeMirror's own focused rule (a light lavender), or that wins and hides light text.
+  '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'var(--saturn-selection)' },
   '.cm-matchingBracket': { outline: '1px solid var(--saturn-border)', backgroundColor: 'transparent' },
   '.cm-panels': { backgroundColor: 'var(--saturn-panel)', color: 'var(--saturn-text)' },
   '.cm-panels-bottom': { borderTop: '1px solid var(--saturn-divider)' },

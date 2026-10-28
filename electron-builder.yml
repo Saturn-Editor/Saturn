@@ -29,7 +29,9 @@ publish:
 
 mac:
   category: public.app-category.developer-tools
-  icon: resources/icons/icon.icns
+  # Icon Composer file: light, dark, clear and tinted appearances (needs Xcode's actool). electron-builder
+  # also derives the .icns that older macOS versions use from it.
+  icon: resources/icons/icon.icon
   target:
     - target: dmg
       arch: [arm64, x64]

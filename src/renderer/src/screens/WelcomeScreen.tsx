@@ -108,7 +108,7 @@ function ProjectRow({ project, badges, languages, onOpen, onRemove, onDelete, on
 }
 
 /** Clone a repository (system git) into a new folder inside the chosen location, then open it. */
-function CloneForm({ onCancel }: { onCancel: () => void }) {
+export function CloneForm({ onCancel, onCloned }: { onCancel: () => void; onCloned?: () => void }) {
   const [url, setUrl] = useState('');
   const [parentDir, setParentDir] = useState('');
   const [busy, setBusy] = useState(false);
@@ -120,6 +120,7 @@ function CloneForm({ onCancel }: { onCancel: () => void }) {
     setProblem(null);
     try {
       await window.saturn.projects.clone(url, parentDir);
+      onCloned?.();
     } catch (e) {
       setProblem(String((e as Error).message).replace(/^.*Error: /, ''));
       setBusy(false);
