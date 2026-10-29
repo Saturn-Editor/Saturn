@@ -3,10 +3,8 @@ import { chooseVersion, type MarketplaceEntry } from '@shared/marketplace';
 import { Button, Checkbox, DialogFooter, Heading, Logo, ModuleIcon } from '@renderer/components';
 import { isUpToDate, MarketplaceEntries, useInstalledModules, useMarketplaceList } from '@renderer/screens/MarketplaceIndex';
 import { ModeToggle } from '@renderer/theme/ModeToggle';
+import { errorText } from '@renderer/helpers';
 
-function errorText(e: unknown): string {
-  return String((e as Error).message).replace(/^.*Error: /, '');
-}
 
 function LanguagePicker({ entries, selected, onToggle }: { entries: MarketplaceEntry[]; selected: Set<string>; onToggle: (id: string, on: boolean) => void }) {
   return (

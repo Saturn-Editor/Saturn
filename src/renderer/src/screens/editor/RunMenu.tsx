@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { RunEntry } from '@shared/types';
 import { Button, ChevronDownIcon, ContextMenu, IconButton, PlayIcon, StopIcon, TextInput, type MenuEntry } from '@renderer/components';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
+import { errorText } from '@renderer/helpers';
 
 const ADD = '__add__';
 
@@ -13,7 +14,7 @@ function AddCommandForm({ onSave, onCancel }: { onSave: (name: string, command: 
     try {
       await onSave(name, command);
     } catch (e) {
-      setError(String((e as Error).message).replace(/^.*Error: /, ''));
+      setError(errorText(e));
     }
   };
   return (

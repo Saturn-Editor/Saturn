@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 // Logo-Light has white lettering (for dark themes); Logo-Dark has dark lettering (for light themes).
-import logoOnDarkUrl from '../../../../resources/icons/Logo-Light.svg?url';
-import logoOnLightUrl from '../../../../resources/icons/Logo-Dark.svg?url';
+import logoOnDarkUrl from '../../../../resources/icons/Logo-Light.png';
+import logoOnLightUrl from '../../../../resources/icons/Logo-Dark.png';
 
 /** The Saturn logo, swapping lettering colour with the theme (follows ThemeApplier's `data-theme-type`). */
 export function Logo({ class: cls = 'h-20' }: { class?: string }) {

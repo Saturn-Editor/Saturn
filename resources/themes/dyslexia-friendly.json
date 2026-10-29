@@ -1,0 +1,93 @@
+{
+  "id": "dyslexia-friendly",
+  "name": "Dyslexia Friendly",
+  "description": "Soft, low-glare colours with the OpenDyslexic font.",
+  "fonts": {
+    "ui": "OpenDyslexic, sans-serif",
+    "editor": "'Atkinson Hyperlegible Mono', ui-monospace, Menlo, Consolas, monospace"
+  },
+  "light": {
+    "colors": {
+      "app": "neutral-50",
+      "editor": "amber-50",
+      "panel": "neutral-100",
+      "raised": "white",
+      "divider": "neutral-200",
+      "border": "neutral-300",
+      "text": "stone-800",
+      "strong": "stone-950",
+      "muted": "stone-600",
+      "accent": "blue-700",
+      "on-accent": "white",
+      "selection": "blue-500/20",
+      "hover": "stone-900/5",
+      "error": "red-700",
+      "warning": "orange-700"
+    },
+    "syntax": [
+      { "scope": "comment", "color": "stone-500", "fontStyle": "italic" },
+      { "scope": "string", "color": "green-800" },
+      { "scope": "keyword", "color": "blue-800" },
+      { "scope": "storage", "color": "blue-800" },
+      { "scope": "storage.type", "color": "teal-700" },
+      { "scope": "constant.numeric", "color": "purple-700" },
+      { "scope": "constant.language", "color": "purple-700" },
+      { "scope": "entity.name.function", "color": "indigo-800" },
+      { "scope": "support.function", "color": "indigo-800" },
+      { "scope": "entity.name.type", "color": "teal-700" },
+      { "scope": "entity.name.class", "color": "teal-700" },
+      { "scope": "support.type", "color": "teal-700" },
+      { "scope": "variable", "color": "stone-800" },
+      { "scope": "entity.name.tag", "color": "blue-800" },
+      { "scope": "entity.other.attribute-name", "color": "amber-800" },
+      { "scope": "invalid.illegal", "color": "red-700", "fontStyle": "underline" },
+      { "scope": "markup.heading", "color": "blue-800", "fontStyle": "bold" },
+      { "scope": "markup.bold", "fontStyle": "bold" },
+      { "scope": "markup.italic", "fontStyle": "italic" },
+      { "scope": "markup.underline.link", "color": "blue-700", "fontStyle": "underline" },
+      { "scope": "markup.inline.raw", "color": "rose-800" }
+    ]
+  },
+  "dark": {
+    "colors": {
+      "app": "neutral-950",
+      "editor": "neutral-900",
+      "panel": "neutral-800",
+      "raised": "neutral-800",
+      "divider": "neutral-700",
+      "border": "neutral-600",
+      "text": "stone-200",
+      "strong": "stone-50",
+      "muted": "stone-400",
+      "accent": "sky-300",
+      "on-accent": "stone-950",
+      "selection": "sky-300/20",
+      "hover": "white/5",
+      "error": "red-400",
+      "warning": "orange-300"
+    },
+    "syntax": [
+      { "scope": "comment", "color": "stone-400", "fontStyle": "italic" },
+      { "scope": "string", "color": "lime-300" },
+      { "scope": "keyword", "color": "sky-300" },
+      { "scope": "storage", "color": "sky-300" },
+      { "scope": "storage.type", "color": "teal-300" },
+      { "scope": "constant.numeric", "color": "violet-300" },
+      { "scope": "constant.language", "color": "violet-300" },
+      { "scope": "entity.name.function", "color": "amber-200" },
+      { "scope": "support.function", "color": "amber-200" },
+      { "scope": "entity.name.type", "color": "teal-200" },
+      { "scope": "entity.name.class", "color": "teal-200" },
+      { "scope": "support.type", "color": "teal-200" },
+      { "scope": "variable", "color": "stone-200" },
+      { "scope": "entity.name.tag", "color": "sky-300" },
+      { "scope": "entity.other.attribute-name", "color": "amber-300" },
+      { "scope": "invalid.illegal", "color": "red-400", "fontStyle": "underline" },
+      { "scope": "markup.heading", "color": "sky-300", "fontStyle": "bold" },
+      { "scope": "markup.bold", "fontStyle": "bold" },
+      { "scope": "markup.italic", "fontStyle": "italic" },
+      { "scope": "markup.underline.link", "color": "sky-300", "fontStyle": "underline" },
+      { "scope": "markup.inline.raw", "color": "rose-300" }
+    ]
+  }
+}

@@ -3,7 +3,7 @@ import { basename, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import type { GitChange, GitCommit, GitOperation, GitRemote, GitStash, GitStatus, GitTag, WorkingDiff } from '@shared/types';
+import type { BlameLine, ConflictVersions, GitChange, GitCommit, GitOperation, GitRemote, GitStash, GitStatus, GitTag, RebaseStep, WorkingDiff } from '@shared/types';
 
 /** Generous, because push, pull and clone talk to a remote. */
 const TIMEOUT_MS = 120_000;
@@ -23,18 +23,18 @@ export function setAskpass(env: (projectPath: string | null) => Record<string, s
 }
 
 /** `git diff --exit-code`-style commands exit 1 when there are differences; those count as success. */
-function git(cwd: string | null, args: string[], okCodes: number[] = []): Promise<string> {
+function git(cwd: string | null, args: string[], okCodes: number[] = [], extraEnv: Record<string, string> = {}): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile('git', cwd ? ['-C', cwd, ...args] : args, {
       timeout: TIMEOUT_MS,
       maxBuffer: 32 * 1024 * 1024,
       // Never prompt in a terminal nobody can see; credentials come through the askpass helper instead.
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...askpassEnv(cwd) },
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...askpassEnv(cwd), ...extraEnv },
       shell: process.platform === 'win32',
     }, (error, stdout, stderr) => {
       if (!error || okCodes.includes(Number(error.code))) return resolve(stdout);
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return reject(new Error("Git isn't installed or isn't on PATH"));
-      reject(new Error((stderr || error.message).trim().split('\n').filter(Boolean).slice(-3).join(' ')));
+      reject(new Error((stderr.trim() || stdout.trim() || error.message).trim().split('\n').filter(Boolean).slice(-3).join(' ')));
     });
   });
 }
@@ -69,7 +69,7 @@ function stoppedMessage(op: GitOperation, gitMessage: string, what?: string): st
  * revert, tags, stashes, remotes, conflict resolution, push and pull. Every path is relative to the project folder.
  */
 export class GitService {
-  constructor(private readonly root: string) {}
+  constructor(readonly root: string) {}
 
   /** Clones `url` into a new folder inside `parentDir` (named after the repo) and returns its path. */
   static async clone(url: string, parentDir: string): Promise<string> {
@@ -114,10 +114,11 @@ export class GitService {
   }
 
   /** Recent commits on the current branch (or `ref`, e.g. another branch or a tag), newest first. */
-  async log(limit = 200, ref?: string): Promise<GitCommit[]> {
+  async log(limit = 200, ref?: string, path?: string): Promise<GitCommit[]> {
     if (ref && (ref.startsWith('-') || /\s/.test(ref))) throw new Error('Not a branch or tag');
     const format = ['%H', '%h', '%an', '%aI', '%s', '%D'].join('%x1f') + '%x1e';
-    const out = await git(this.root, ['log', `-n${limit}`, `--format=${format}`, ...(ref ? [ref, '--'] : [])]).catch((e: Error) => {
+    const args = ['log', `-n${limit}`, `--format=${format}`, ...(path ? ['--follow'] : []), ...(ref ? [ref] : []), '--', ...(path ? [path] : [])];
+    const out = await git(this.root, args).catch((e: Error) => {
       // A new repository has no commits yet.
       if (/does not have any commits|bad default revision/.test(e.message)) return '';
       throw e;
@@ -465,5 +466,52 @@ export class GitService {
     if (!tracked) return git(this.root, ['diff', '--no-index', '--', process.platform === 'win32' ? 'NUL' : '/dev/null', path], [1]);
     const hasHead = await git(this.root, ['rev-parse', '--verify', 'HEAD']).then(() => true, () => false);
     return git(this.root, hasHead ? ['diff', 'HEAD', '--', path] : ['diff', '--cached', '--', path]);
+  }
+
+  async blame(path: string): Promise<BlameLine[]> {
+    const out = await git(this.root, ['blame', '--porcelain', '--', path]);
+    const commits = new Map<string, Omit<BlameLine, 'hash'>>();
+    const lines: BlameLine[] = [];
+    let hash = '';
+    for (const line of out.split('\n')) {
+      const header = /^([0-9a-f]{40}) \d+ \d+/.exec(line);
+      if (header) {
+        hash = header[1];
+        if (!commits.has(hash)) commits.set(hash, { author: '', time: 0, summary: '' });
+      } else if (line.startsWith('author ')) commits.get(hash)!.author = line.slice(7);
+      else if (line.startsWith('author-time ')) commits.get(hash)!.time = Number(line.slice(12)) * 1000;
+      else if (line.startsWith('summary ')) commits.get(hash)!.summary = line.slice(8);
+      else if (line.startsWith('\t')) lines.push({ hash, ...commits.get(hash)! });
+    }
+    return lines.map((l) => (/^0+$/.test(l.hash) ? { ...l, author: 'You', summary: 'Not committed yet' } : l));
+  }
+
+  async rebaseCommits(onto: string): Promise<GitCommit[]> {
+    if (!/^[0-9a-f]{4,40}$/i.test(onto)) throw new Error('Not a commit hash');
+    return (await this.log(500, `${onto}..HEAD`)).reverse();
+  }
+
+  async rebaseInteractive(onto: string, steps: RebaseStep[]): Promise<void> {
+    if (!/^[0-9a-f]{4,40}$/i.test(onto)) throw new Error('Not a commit hash');
+    if (steps.some((s) => !/^[0-9a-f]{4,40}$/i.test(s.hash) || !['pick', 'squash', 'fixup', 'edit', 'drop'].includes(s.action))) throw new Error('Invalid rebase plan');
+    if (['squash', 'fixup'].includes(steps.find((s) => s.action !== 'drop')?.action ?? '')) throw new Error('The first commit kept must be picked or edited');
+    const dir = await mkdtemp(join(tmpdir(), 'saturn-rebase-'));
+    const todo = join(dir, 'todo');
+    try {
+      await writeFile(todo, steps.map((s) => `${s.action} ${s.hash}`).join('\n') + '\n');
+      const editor = `cp '${todo.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`;
+      await git(this.root, ['-c', 'core.editor=true', 'rebase', '-i', onto], [], { GIT_SEQUENCE_EDITOR: editor }).catch((e: Error) => {
+        if (/Stopped at|You can amend the commit now/i.test(e.message)) return '';
+        throw new Error(stoppedMessage('rebase', e.message));
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  async conflictVersions(path: string): Promise<ConflictVersions> {
+    const stage = (n: number) => git(this.root, ['show', `:${n}:${path}`]).catch(() => '');
+    const [base, ours, theirs] = await Promise.all([stage(1), stage(2), stage(3)]);
+    return { base, ours, theirs };
   }
 }

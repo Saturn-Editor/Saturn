@@ -6,6 +6,7 @@ export interface Pty {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(): void;
+  readonly process?: string;
 }
 
 export type PtyFactory = (
@@ -17,6 +18,11 @@ export type PtyFactory = (
 interface Session {
   pty: Pty;
   owner: number;
+  shell: string;
+}
+
+function programName(path: string): string {
+  return (path.split(/[\\/]/).pop() ?? path).replace(/\.exe$/i, '').replace(/^-/, '').toLowerCase();
 }
 
 type DataListener = (owner: number, id: string, data: string) => void;
@@ -36,12 +42,13 @@ export class TerminalService {
 
   create(opts: { cwd: string; name: string; command?: string }, owner: number): string {
     const args = this.platform === 'win32' ? [] : ['-l'];
-    const pty = this.factory(this.defaultShell(), args, { cwd: opts.cwd, cols: 80, rows: 24, env: { ...this.env, TERM: 'xterm-256color' } });
+    const shell = this.defaultShell();
+    const pty = this.factory(shell, args, { cwd: opts.cwd, cols: 80, rows: 24, env: { ...this.env, TERM: 'xterm-256color' } });
     // Commands are typed into an interactive shell rather than run with `-c`: very short commands
     // can exit before their output is read, and the user can keep using the terminal afterwards.
     if (opts.command) pty.write(`${opts.command}\r`);
     const id = randomUUID();
-    this.sessions.set(id, { pty, owner });
+    this.sessions.set(id, { pty, owner, shell });
     pty.onData((data) => this.dataListeners.forEach((l) => l(owner, id, data)));
     pty.onExit((code) => {
       this.sessions.delete(id);
@@ -61,6 +68,15 @@ export class TerminalService {
   kill(id: string): void {
     this.sessions.get(id)?.pty.kill();
     this.sessions.delete(id);
+  }
+
+  runningFor(owner: number): string[] {
+    const running: string[] = [];
+    for (const s of this.sessions.values()) {
+      const current = s.pty.process ? programName(s.pty.process) : '';
+      if (s.owner === owner && current && current !== programName(s.shell)) running.push(current);
+    }
+    return running;
   }
 
   killAllFor(owner: number): void {

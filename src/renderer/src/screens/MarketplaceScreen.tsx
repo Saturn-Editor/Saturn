@@ -7,13 +7,11 @@ import { MODE_LABELS } from '@renderer/theme/ModeToggle';
 import {
   isUpToDate, MarketplaceEntries, updateFor, useInstalledModules, useInstalledThemes, useMarketplaceList, type ListState,
 } from '@renderer/screens/MarketplaceIndex';
+import { errorText } from '@renderer/helpers';
 
 type Section = MarketplaceKind;
 type Tab = 'available' | 'installed';
 
-function errorText(e: unknown): string {
-  return String((e as Error).message).replace(/^.*Error: /, '');
-}
 
 /** One item. `icon` is its picture (installed icon, or Marketplace image URL); `badge` is its alt text. */
 function Row({ badge, icon, title, version, detail, children }: { badge: string; icon?: string | null; title: string; version?: string; detail: string; children?: preact.ComponentChildren }) {

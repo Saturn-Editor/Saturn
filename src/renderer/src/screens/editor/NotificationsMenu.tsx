@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { AppNotification } from '@shared/modules';
 import { BellIcon, Button, CloseIcon, IconButton } from '@renderer/components';
+import { errorText } from '@renderer/helpers';
 
 const TOAST_MS = 6000;
 
@@ -22,7 +23,9 @@ export function NotificationsMenu() {
       seen.current = new Set(list.map((n) => n.id));
       setItems(list);
     });
-    return window.saturn.notifications.onChanged((list) => {
+    return window.saturn.notifications.onChanged((all) => {
+      const project = window.saturn.window.projectPath;
+      const list = all.filter((n) => !n.projectPath || n.projectPath === project);
       const fresh = seen.current ? list.find((n) => !n.read && !seen.current!.has(n.id)) : undefined;
       for (const n of list) seen.current?.add(n.id);
       if (fresh) setToast(fresh);
@@ -57,7 +60,7 @@ export function NotificationsMenu() {
   };
   const act = (n: AppNotification, index: number) => {
     setProblem(null);
-    void window.saturn.notifications.act(n.id, index).catch((e) => setProblem(String((e as Error).message).replace(/^.*Error: /, '')));
+    void window.saturn.notifications.act(n.id, index).catch((e) => setProblem(errorText(e)));
   };
 
   return (

@@ -1,5 +1,6 @@
 import { computed, signal } from '@preact/signals';
 import type { SaturnApi } from '@shared/api';
+import { baseName, parentOf } from '@renderer/helpers';
 
 export interface OpenDoc {
   path: string;
@@ -17,12 +18,13 @@ export interface InfoDoc {
   /** The tab's id: the file's path, or "diff:…" for a diff. */
   path: string;
   name: string;
-  reason: 'binary' | 'too-large' | 'diff';
+  reason: 'binary' | 'too-large' | 'diff' | 'merge' | 'page';
   bytes?: number;
   /** For a commit's diff: the unified diff text. */
   diff?: string;
   /** For uncommitted changes: the project-relative file, whose diff stays current. */
   workingPath?: string;
+  mergePath?: string;
 }
 
 /** How many editors a split can have. */
@@ -30,9 +32,6 @@ const MAX_GROUPS = 4;
 const TYPING_SAVE_MS = 2000;
 const IDLE_SAVE_MS = 1000;
 
-function baseName(path: string): string {
-  return path.split(/[\\/]/).pop() ?? path;
-}
 
 /** Is `path` the same as `dir` or inside it? */
 function isUnder(path: string, dir: string): boolean {
@@ -124,6 +123,8 @@ export class EditorDocuments {
   autoSave: 'typing' | 'idle' | 'off' = 'idle';
   /** Pending auto-saves per file. */
   private readonly saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  readonly diskVersion = signal(0);
+  singlePage = false;
 
   /** "typing": at most one save per 2s while changes keep coming; "idle": 1s after the last change. */
   private scheduleAutoSave(path: string): void {
@@ -160,6 +161,11 @@ export class EditorDocuments {
   }
 
   private async load(path: string, opts: { force?: boolean }): Promise<OpenResult> {
+    if (path.toLowerCase().endsWith('.snp')) {
+      if (this.singlePage) this.infos.value = this.infos.value.filter((i) => i.reason !== 'page');
+      this.openInfo({ path, name: baseName(path).slice(0, -4), reason: 'page' });
+      return 'opened';
+    }
     const result = await this.api.fs.readFile(path, opts);
     this.infos.value = this.infos.value.filter((i) => i.path !== path);
     if (result.kind !== 'text') {
@@ -176,10 +182,17 @@ export class EditorDocuments {
 
   /** Opens (or refreshes and switches to) a read-only diff tab: a commit's `diff` text, or a file's live `workingPath` changes. */
   openDiff(id: string, name: string, source: { diff: string } | { workingPath: string }): void {
-    const tab: InfoDoc = { path: `diff:${id}`, name, reason: 'diff', ...source };
+    this.openInfo({ path: `diff:${id}`, name, reason: 'diff', ...source });
+  }
+
+  private openInfo(tab: InfoDoc): void {
     const existing = this.infos.value.some((i) => i.path === tab.path);
     this.infos.value = existing ? this.infos.value.map((i) => (i.path === tab.path ? tab : i)) : [...this.infos.value, tab];
     this.activePath.value = tab.path;
+  }
+
+  openMerge(path: string): void {
+    this.openInfo({ path: `diff:merge:${path}`, name: `${baseName(path)} (merge)`, reason: 'merge', mergePath: path });
   }
 
   close(path: string): void {
@@ -210,7 +223,7 @@ export class EditorDocuments {
   moved(from: string, to: string): void {
     const move = (p: string) => (isUnder(p, from) ? to + p.slice(from.length) : p);
     this.docs.value = this.docs.value.map((d) => (isUnder(d.path, from) ? { ...d, path: move(d.path), name: baseName(move(d.path)) } : d));
-    this.infos.value = this.infos.value.map((i) => (isUnder(i.path, from) ? { ...i, path: move(i.path), name: baseName(move(i.path)) } : i));
+    this.infos.value = this.infos.value.map((i) => (isUnder(i.path, from) ? { ...i, path: move(i.path), name: i.reason === 'page' ? baseName(move(i.path)).slice(0, -4) : baseName(move(i.path)) } : i));
     if (this.activePath.value) this.activePath.value = move(this.activePath.value);
     this.groupPaths.value = this.groupPaths.value.map((p) => (p ? move(p) : p));
   }
@@ -234,8 +247,10 @@ export class EditorDocuments {
    * Re-reads every open file without unsaved changes (e.g. after a branch switch or pull) so editors
    * show what's on disk. Files that no longer exist are closed.
    */
-  async reloadClean(): Promise<void> {
-    for (const doc of this.docs.value.filter((d) => !d.dirty)) {
+  async reloadClean(dir?: string): Promise<void> {
+    const inDir = (path: string) => dir === undefined || parentOf(path) === dir;
+    if (this.infos.value.some((i) => !i.diff && inDir(i.path))) this.diskVersion.value++;
+    for (const doc of this.docs.value.filter((d) => !d.dirty && inDir(d.path))) {
       const result = await this.api.fs.readFile(doc.path).catch(() => null);
       if (!result) {
         this.close(doc.path);

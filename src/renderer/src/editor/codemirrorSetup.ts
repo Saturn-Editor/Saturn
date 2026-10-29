@@ -12,6 +12,9 @@ import { actionForKey } from '@renderer/commands/keymap';
 import { toggleBreakpoint } from './breakpoints';
 import { conflictMarkers } from './conflicts';
 import { findReferences, formatDocument, goToDefinition, renameSymbol } from '@renderer/modules/languageServer';
+import { blameExtension } from './blame';
+import { testGutterExtension } from './testGutter';
+import { coverageExtension } from './coverageGutter';
 
 /** Plan 3 puts language support (highlighting, completion) in here; the core leaves it empty. */
 export const languageCompartment = new Compartment();
@@ -75,6 +78,7 @@ const saturnTheme = EditorView.theme({
   // Conditional: a bar across the dot. Logpoint: a diamond (it logs instead of stopping).
   '.cm-saturn-conditional': { backgroundImage: 'linear-gradient(transparent 40%, var(--saturn-editor) 40%, var(--saturn-editor) 60%, transparent 60%)' },
   '.cm-saturn-logpoint': { borderRadius: '0', transform: 'rotate(45deg) scale(0.85)' },
+  '.cm-saturn-disabled': { backgroundColor: 'transparent', backgroundImage: 'none', boxShadow: 'inset 0 0 0 1.5px var(--color-red-500)' },
   '.cm-lineNumbers .cm-gutterElement': { cursor: 'pointer' },
   '.cm-saturn-execution': { backgroundColor: 'color-mix(in srgb, var(--saturn-accent) 22%, transparent)' },
   '.cm-saturn-conflict-ours': { backgroundColor: 'color-mix(in srgb, var(--color-green-500) 14%, transparent)' },
@@ -138,6 +142,9 @@ export function createEditorState(text: string, callbacks: EditorCallbacks, befo
     doc: text,
     extensions: [
       before,
+      blameExtension,
+      testGutterExtension,
+      coverageExtension,
       // Clicking a line number adds or removes a breakpoint there.
       lineNumbers({ domEventHandlers: { mousedown: (view, line, e) => (e as MouseEvent).button === 0 && toggleBreakpoint(view, line.from) } }),
       highlightActiveLineGutter(),

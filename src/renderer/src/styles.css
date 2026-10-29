@@ -1,5 +1,14 @@
 /* theme(static) keeps every Tailwind colour variable, since theme files can name any of them. */
 @import "tailwindcss" theme(static);
+@import '@fontsource/opendyslexic/400.css';
+@import '@fontsource/opendyslexic/700.css';
+@import '@fontsource/opendyslexic/400-italic.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/700.css';
+@import '@fontsource/jetbrains-mono/400-italic.css';
+@import '@fontsource/atkinson-hyperlegible-mono/400.css';
+@import '@fontsource/atkinson-hyperlegible-mono/700.css';
+@import '@fontsource/atkinson-hyperlegible-mono/400-italic.css';
 
 /* Theme tokens: values come from the active theme JSON at runtime (see ThemeApplier). */
 @theme inline {
@@ -16,7 +25,10 @@
   --color-on-accent: var(--saturn-on-accent);
   --color-selection: var(--saturn-selection);
   --color-hover: var(--saturn-hover);
-  --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --color-error: var(--saturn-error);
+  --color-warning: var(--saturn-warning);
+  --font-mono: var(--saturn-font-editor, "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace);
+  --font-ui: var(--saturn-font-ui, system-ui, -apple-system, "Segoe UI", sans-serif);
 }
 
 /* Sharp corners everywhere: no rounded-* utilities exist. */
@@ -30,6 +42,6 @@
   }
   body {
     @apply m-0 bg-app text-text text-xs antialiased select-none overflow-hidden;
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-family: var(--font-ui);
   }
 }

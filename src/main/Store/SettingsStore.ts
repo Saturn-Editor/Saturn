@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path';
 import { CUSTOM_PREFIX, KEYMAPS, type CustomKeymap, type KeymapChoice } from '@shared/keymaps';
 
 function isCustomKeymap(v: unknown): v is CustomKeymap {
@@ -27,7 +28,9 @@ export interface Settings {
   autoCloseBrackets?: boolean;
   formatOnSave?: boolean;
   branchSwitch?: 'ask' | 'bring' | 'shelve';
-  extensionLanguages?: Record<string, string>;
+  debugWindow?: 'docked' | 'separate';
+  diffLayout?: 'split' | 'unified';
+  projectsFolder?: string | null;
   textSize?: number;
   encoding?: FileEncoding;
   autoSave?: 'typing' | 'idle' | 'off';
@@ -68,7 +71,9 @@ export class SettingsStore {
       autoCloseBrackets: s.autoCloseBrackets ?? true,
       formatOnSave: s.formatOnSave ?? false,
       branchSwitch: s.branchSwitch ?? 'ask',
-      extensionLanguages: s.extensionLanguages ?? {},
+      debugWindow: s.debugWindow ?? 'docked',
+      diffLayout: s.diffLayout ?? 'split',
+      projectsFolder: s.projectsFolder ?? null,
       textSize: s.textSize ?? 100,
       encoding: s.encoding ?? 'utf-8',
       diagnostics: s.diagnostics ?? true,
@@ -115,7 +120,9 @@ export class SettingsStore {
       ...(change.autoCloseBrackets !== undefined && { autoCloseBrackets: change.autoCloseBrackets }),
       ...(change.formatOnSave !== undefined && { formatOnSave: change.formatOnSave }),
       ...(change.branchSwitch && ['ask', 'bring', 'shelve'].includes(change.branchSwitch) && { branchSwitch: change.branchSwitch }),
-      ...(change.extensionLanguages !== undefined && { extensionLanguages: change.extensionLanguages }),
+      ...(change.debugWindow && ['docked', 'separate'].includes(change.debugWindow) && { debugWindow: change.debugWindow }),
+      ...(change.diffLayout && ['split', 'unified'].includes(change.diffLayout) && { diffLayout: change.diffLayout }),
+      ...(change.projectsFolder !== undefined && (change.projectsFolder === null || (typeof change.projectsFolder === 'string' && isAbsolute(change.projectsFolder))) && { projectsFolder: change.projectsFolder }),
       ...(change.textSize !== undefined && { textSize: change.textSize }),
       ...(change.encoding !== undefined && FILE_ENCODINGS.some((e) => e.id === change.encoding) && { encoding: change.encoding }),
       ...(change.diagnostics !== undefined && { diagnostics: change.diagnostics }),

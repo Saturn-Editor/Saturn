@@ -3,6 +3,7 @@ import type { ModuleSummary } from '@shared/modules';
 import type { AppInfo, ThemeSummary } from '@shared/types';
 import { Button, Heading, Logo } from '@renderer/components';
 import { useInstalledModules, useInstalledThemes } from './MarketplaceIndex';
+import { errorText } from '@renderer/helpers';
 
 /** Open-source software bundled in Saturn. All are MIT licensed. */
 const ATTRIBUTIONS: { name: string; by: string }[] = [
@@ -160,7 +161,7 @@ export function AboutPage() {
                 <InfoRow key={f.id} label={f.label}>
                   <div class="flex items-center gap-2">
                     <span class="flex-1 truncate select-text" title={f.path}>{f.path}</span>
-                    <Button testId={`open-folder-${f.id}`} onClick={() => void window.saturn.app.openFolder(f.id).catch((e) => setProblem(String((e as Error).message).replace(/^.*Error: /, '')))}>
+                    <Button testId={`open-folder-${f.id}`} onClick={() => void window.saturn.app.openFolder(f.id).catch((e) => setProblem(errorText(e)))}>
                       Open
                     </Button>
                   </div>

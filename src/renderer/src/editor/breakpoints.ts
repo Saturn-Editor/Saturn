@@ -4,24 +4,24 @@ import type { Breakpoint } from '@shared/types';
 
 /** A breakpoint's dot: plain, conditional (a bar across it) or a logpoint (a diamond). */
 class BreakpointMarker extends GutterMarker {
-  constructor(readonly condition?: string, readonly logMessage?: string) {
+  constructor(readonly condition?: string, readonly logMessage?: string, readonly disabled = false) {
     super();
   }
 
   eq(other: BreakpointMarker) {
-    return other.condition === this.condition && other.logMessage === this.logMessage;
+    return other.condition === this.condition && other.logMessage === this.logMessage && other.disabled === this.disabled;
   }
 
   toDOM() {
     const dot = document.createElement('span');
-    dot.className = `cm-saturn-breakpoint${this.logMessage ? ' cm-saturn-logpoint' : this.condition ? ' cm-saturn-conditional' : ''}`;
-    dot.title = this.logMessage ? `Logs: ${this.logMessage}` : this.condition ? `Stops when: ${this.condition}` : 'Breakpoint';
+    dot.className = `cm-saturn-breakpoint${this.logMessage ? ' cm-saturn-logpoint' : this.condition ? ' cm-saturn-conditional' : ''}${this.disabled ? ' cm-saturn-disabled' : ''}`;
+    dot.title = `${this.logMessage ? `Logs: ${this.logMessage}` : this.condition ? `Stops when: ${this.condition}` : 'Breakpoint'}${this.disabled ? ' (off)' : ''}`;
     return dot;
   }
 }
 
 const plain = new BreakpointMarker();
-const markerFor = (b: Partial<Breakpoint>) => (b.condition || b.logMessage ? new BreakpointMarker(b.condition, b.logMessage) : plain);
+const markerFor = (b: Partial<Breakpoint>) => (b.condition || b.logMessage || b.enabled === false ? new BreakpointMarker(b.condition, b.logMessage, b.enabled === false) : plain);
 
 /** Toggles the breakpoint on the line starting at this position. */
 const toggleEffect = StateEffect.define<number>();
@@ -61,7 +61,7 @@ export function breakpointLines(state: EditorState): Breakpoint[] {
   state.field(breakpointField, false)?.between(0, state.doc.length, (from, _to, marker) => {
     const m = marker as BreakpointMarker;
     const line = state.doc.lineAt(from).number;
-    byLine.set(line, { line, ...(m.condition && { condition: m.condition }), ...(m.logMessage && { logMessage: m.logMessage }) });
+    byLine.set(line, { line, ...(m.condition && { condition: m.condition }), ...(m.logMessage && { logMessage: m.logMessage }), ...(m.disabled && { enabled: false }) });
   });
   return [...byLine.values()].sort((a, b) => a.line - b.line);
 }

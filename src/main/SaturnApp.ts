@@ -18,7 +18,7 @@ import { UpdateService } from './Services/UpdateService';
 import { DebugService } from './Services/DebugService';
 import { AskpassService } from './Services/AskpassService';
 import { TrashService } from './Services/TrashService';
-import { LanguageChoiceStore } from './Store/LanguageChoiceStore';
+import { LanguageVersionStore } from './Store/LanguageVersionStore';
 import { setAskpass } from './Services/GitService';
 import { BreakpointStore } from './Store/BreakpointStore';
 import { CodeModuleService } from './Services/CodeModuleService';
@@ -30,8 +30,11 @@ import { ThemeService } from './Services/ThemeService';
 import { LayoutStore } from './Store/LayoutStore';
 import { RecentProjectsStore } from './Store/RecentProjectsStore';
 import { RunConfigStore } from './Store/RunConfigStore';
+import { TestSetStore } from './Store/TestSetStore';
 import { SettingsStore } from './Store/SettingsStore';
 import { WindowManager } from './WindowManager';
+import { NotebookIpc } from './Notebooks/NotebookIpc';
+import { NotebookStore } from './Notebooks/NotebookStore';
 
 const nodePtyFactory: PtyFactory = (shell, args, opts) => {
   const pty = spawn(shell, args, { name: 'xterm-256color', ...opts });
@@ -41,6 +44,9 @@ const nodePtyFactory: PtyFactory = (shell, args, opts) => {
     write: (data) => pty.write(data),
     resize: (cols, rows) => pty.resize(cols, rows),
     kill: () => pty.kill(),
+    get process() {
+      return pty.process;
+    },
   };
 };
 
@@ -100,11 +106,21 @@ export class SaturnApp {
       paths.dir('module-storage'),
     );
     this.serveIcons(modules, paths.dir('themes'));
+    new NotebookIpc(new NotebookStore(paths.file('notebooks.json'), paths.file('notebook-settings.json'), paths.dir('notebooks')), windows).register();
     let router: IpcRouter | null = null;
     // Set once everything it needs exists (below).
     let resetSaturn: () => Promise<void> = async () => undefined;
     const notifications = new NotificationService();
     notifications.onChanged((items) => router?.broadcast('notifications', 'changed', items));
+    void themes.incomplete().then((list) => {
+      for (const { name, missing } of list) {
+        notifications.add({
+          moduleId: 'saturn',
+          title: `The ${name} theme is incomplete`,
+          message: `It's missing ${missing.join(', ')}. Saturn's defaults are used in their place. Please report this to the theme's developer.`,
+        });
+      }
+    });
     // Saturn updates: windows see progress; a downloaded update posts a "restart to update" notification.
     const updates = new UpdateService();
     updates.onChanged((status) => {
@@ -150,8 +166,11 @@ export class SaturnApp {
       message: (projectPath, message, kind) => router?.sendToProject(projectPath, 'modules', 'message', { message, kind, moduleId: 'saturn' }),
       runInTerminal: (projectPath, title, command) => router?.sendToProject(projectPath, 'modules', 'runInTerminal', title, command),
     });
+    const languageVersions = new LanguageVersionStore(paths);
     const host = new ExtensionHostService({
+      languageVersion: (projectPath, languageId) => languageVersions.get(projectPath, languageId),
       openFile: (projectPath, path, line, column) => router?.sendToProject(projectPath, 'modules', 'openFile', path, line, column),
+      testEvent: (projectPath, event) => router?.sendToProject(projectPath, 'tests', 'event', event),
       refreshPanel: (panelId, itemId) => router?.broadcast('modules', 'treeRefresh', panelId, itemId),
       showMessage: (message) => {
         if (message.projectPath) router?.sendToProject(message.projectPath, 'modules', 'message', message);
@@ -174,14 +193,17 @@ export class SaturnApp {
       void debug.stop(projectPath);
     });
 
+    const terminals = new TerminalService(nodePtyFactory);
+    windows.setRunningCheck((id) => terminals.runningFor(id));
     router = new IpcRouter({
       windows,
       themes,
       recent: new RecentProjectsStore(paths.file('recent-projects.json')),
       creator: new ProjectCreator(),
       layouts: new LayoutStore(paths),
-      terminals: new TerminalService(nodePtyFactory),
+      terminals,
       runs: new RunConfigStore(paths),
+      testSets: new TestSetStore(paths),
       modules,
       host,
       languageServers,
@@ -192,7 +214,7 @@ export class SaturnApp {
       debug,
       askpass,
       trash,
-      languageChoices: new LanguageChoiceStore(paths.file('language-choices.json')),
+      languageVersions,
       marketplace,
       reset: () => resetSaturn(),
     });

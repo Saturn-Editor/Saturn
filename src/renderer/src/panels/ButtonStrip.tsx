@@ -1,5 +1,6 @@
 import { IconButton, ModuleIcon, QuestionIcon } from '@renderer/components';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
+import { errorText } from '@renderer/helpers';
 
 /**
  * The editor's right-hand bar, below the top bar's Settings button: one button per `contributes.buttons`
@@ -19,7 +20,7 @@ export function ButtonStrip() {
           label={b.title}
           data-testid={`strip-button-${b.command}`}
           onClick={() => void window.saturn.modules.runCommand(b.command).catch((e) => {
-            ws.notice.value = { text: String((e as Error).message).replace(/^.*Error: /, ''), kind: 'error' };
+            ws.notice.value = { text: errorText(e), kind: 'error' };
           })}
         />
       ))}

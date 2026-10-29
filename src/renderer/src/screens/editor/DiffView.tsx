@@ -1,8 +1,7 @@
 import { signal } from '@preact/signals';
 import { useEffect, useState } from 'preact/hooks';
 import type { WorkingDiff } from '@shared/types';
-import { SegmentedControl } from '@renderer/components';
-import { errorText } from '@renderer/panels/builtin/gitState';
+import { errorText } from '@renderer/helpers';
 
 /** One line of a unified diff, with its old and new line numbers. */
 interface DiffLine {
@@ -20,10 +19,9 @@ interface Hunk {
   patch: string;
 }
 
-type Layout = 'unified' | 'split';
-
-/** Unified or side by side, shared by every diff tab and kept while Saturn runs. */
-const layout = signal<Layout>('unified');
+const layout = signal<'unified' | 'split'>('split');
+void window.saturn.settings.get().then((s) => (layout.value = s.diffLayout));
+window.saturn.settings.onChanged((s) => (layout.value = s.diffLayout));
 
 /** Parses a one-file unified diff (from `git diff` or `git show`) into hunks. */
 function parse(diff: string): Hunk[] {
@@ -173,16 +171,6 @@ function WorkingDiffView({ path }: { path: string }) {
 export function DiffView({ diff, workingPath }: { diff?: string; workingPath?: string }) {
   return (
     <div class="h-full flex flex-col bg-editor" data-testid="diff-view">
-      <div class="flex items-center justify-end h-9 px-2 border-b border-divider shrink-0">
-        <div class="w-56">
-          <SegmentedControl<Layout>
-            label="Diff layout"
-            value={layout.value}
-            onChange={(v) => (layout.value = v)}
-            options={[{ id: 'unified', label: 'Unified' }, { id: 'split', label: 'Side by side' }]}
-          />
-        </div>
-      </div>
       <div class="flex-1 overflow-auto font-mono text-[12px] leading-[1.6] select-text">
         {workingPath ? <WorkingDiffView path={workingPath} /> : <Hunks diff={diff ?? ''} />}
       </div>

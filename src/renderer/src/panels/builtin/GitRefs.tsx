@@ -2,7 +2,7 @@ import { useEffect, useState } from 'preact/hooks';
 import type { GitStatus, GitTag } from '@shared/types';
 import { ChevronDownIcon, ChevronRightIcon, IconButton, PlusIcon, TextInput } from '@renderer/components';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
-import { errorText } from './gitState';
+import { errorText } from '@renderer/helpers';
 
 type Kind = 'branch' | 'remote' | 'tag';
 

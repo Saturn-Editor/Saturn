@@ -203,7 +203,7 @@ export class CodeModuleService {
       // A Settings tab for modules with settings, a language server whose features can be switched off,
       // or previews (whose default view can be chosen).
       const previews = kind === 'language' ? ((m as LanguageManifest).contributes?.previews ?? []) : [];
-      if (c.settings?.length || declared.length || previews.length) snap.settings.push({ moduleId: m.id, moduleName: m.name, badge, icon, items: c.settings ?? [], features: declared });
+      if (c.settings?.length || declared.length || previews.length) snap.settings.push({ kind, moduleId: m.id, moduleName: m.name, badge, icon, items: c.settings ?? [], features: declared });
       if (kind !== 'language') continue;
       const served = new Set(lc.languageServer?.languages ?? []);
       const enabled = declared.filter((f) => settings[featureKey(f)] !== false);

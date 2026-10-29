@@ -9,9 +9,11 @@ import { featureKey, LANGUAGE_FEATURES, type ContributionSnapshot, type SettingV
 import { FILE_ENCODINGS, TEXT_SIZES, type AppSettings, type BranchSwitchMode, type FileEncoding, type ThemeSummary, type UpdateStatus } from '@shared/types';
 import { Button, FieldInput, ModuleIcon, FormField, Heading, RadioList, SegmentedControl, Select, SidebarMenu, TabMenu, TextInput, Toggle } from '@renderer/components';
 import { ModeToggle } from '@renderer/theme/ModeToggle';
+import { errorText } from '@renderer/helpers';
+import { NotebookSettings } from '@renderer/notebooks/NotebookSettings';
 
-/** Built-in sections, then one per module that declares settings ("module:<id>"). */
-type Section = 'appearance' | 'editor' | 'languages' | 'keymap' | 'marketplace' | 'advanced' | `module:${string}`;
+/** Built-in sections; "module:<id>" asks to open Languages or Extensions on that module's tab. */
+type Section = 'appearance' | 'editor' | 'languages' | 'extensions' | 'notebooks' | 'keymap' | 'marketplace' | 'advanced' | `module:${string}`;
 
 /** Light/Dark mode (or Sync with OS), the active theme and text size. Also shown on the Welcome screen. */
 export function AppearanceSection() {
@@ -57,9 +59,6 @@ export function AppearanceSection() {
   );
 }
 
-function errorText(e: unknown): string {
-  return String((e as Error).message).replace(/^.*Error: /, '');
-}
 
 /** The editable settings, kept in sync with changes from any window. */
 function useAppSettings(): AppSettings | null {
@@ -226,6 +225,36 @@ function AdvancedSection() {
           value={settings.branchSwitch}
           onChange={(branchSwitch) => void window.saturn.settings.update({ branchSwitch })}
           options={[{ id: 'ask', label: 'Ask each time' }, { id: 'bring', label: 'Bring them along' }, { id: 'shelve', label: 'Shelve for that branch' }]}
+        />
+      </div>
+      <p class="mt-0 mb-2 text-muted">Show diffs:</p>
+      <div class="mb-5">
+        <SegmentedControl<AppSettings['diffLayout']>
+          label="Show diffs"
+          value={settings.diffLayout}
+          onChange={(diffLayout) => void window.saturn.settings.update({ diffLayout })}
+          options={[{ id: 'split', label: 'Side by side' }, { id: 'unified', label: 'Unified' }]}
+        />
+      </div>
+      <Heading>Projects</Heading>
+      <p class="mt-0 mb-2 text-muted">Where New Project and Clone suggest putting new projects.</p>
+      <div class="flex items-center gap-2 mb-5">
+        <div class="flex-1 min-w-0 h-7 px-2 flex items-center bg-editor border border-border truncate" title={settings.projectsFolder ?? undefined} data-testid="projects-folder">
+          {settings.projectsFolder ?? 'SaturnProjects in your home folder, or your home folder'}
+        </div>
+        <Button testId="projects-folder-choose" onClick={() => void window.saturn.projects.pickFolder().then((path) => {
+          if (path) void window.saturn.settings.update({ projectsFolder: path });
+        })}>Change…</Button>
+        <Button disabled={!settings.projectsFolder} onClick={() => void window.saturn.settings.update({ projectsFolder: null })}>Use default</Button>
+      </div>
+      <Heading>Debugging</Heading>
+      <p class="mt-0 mb-2 text-muted">Show the debug panels:</p>
+      <div class="mb-5">
+        <SegmentedControl<AppSettings['debugWindow']>
+          label="Show the debug panels"
+          value={settings.debugWindow}
+          onChange={(debugWindow) => void window.saturn.settings.update({ debugWindow })}
+          options={[{ id: 'docked', label: 'In the project window' }, { id: 'separate', label: 'In a separate window' }]}
         />
       </div>
       <Heading>Reset Saturn</Heading>
@@ -451,12 +480,12 @@ function ModuleSection({ tab }: { tab: ModuleTab }) {
 
 const MODULE_PREFIX = 'module:';
 
-/** Settings → Languages: a tab per installed language with settings or language features. */
-function LanguagesSection({ tabs, selected, onSelect }: { tabs: ModuleTab[]; selected: string | null; onSelect: (id: string) => void }) {
+/** Settings → Languages or Extensions: a tab per installed module with settings (or, for languages, language features). */
+function ModulesSection({ tabs, selected, onSelect, testId }: { tabs: ModuleTab[]; selected: string | null; onSelect: (id: string) => void; testId: string }) {
   if (tabs.length === 0) return <p class="m-0 text-muted">None.</p>;
   const tab = tabs.find((t) => t.moduleId === selected) ?? tabs[0];
   return (
-    <div class="-m-4 flex flex-col" data-testid="settings-languages">
+    <div class="-m-4 flex flex-col" data-testid={testId}>
       <TabMenu<string>
         tabs={tabs.map((t) => ({ id: t.moduleId, label: t.moduleName, icon: <ModuleIcon icon={t.icon} badge={t.badge} /> }))}
         active={tab.moduleId}
@@ -474,44 +503,33 @@ function LanguagesSection({ tabs, selected, onSelect }: { tabs: ModuleTab[]; sel
 export function SettingsScreen({ embedded = false }: { embedded?: boolean }) {
   // A Settings window can be opened on a section, e.g. a module's tab from a notification.
   const requested = embedded ? null : window.saturn.window.section;
-  const [section, setSection] = useState<Section>(requested && /^(appearance|editor|languages|keymap|marketplace|advanced|module:.+)$/.test(requested) ? (requested as Section) : 'appearance');
+  const [section, setSection] = useState<Section>(requested && /^(appearance|editor|languages|extensions|notebooks|keymap|marketplace|advanced|module:.+)$/.test(requested) ? (requested as Section) : 'appearance');
   const [moduleTabs, setModuleTabs] = useState<ModuleTab[]>([]);
   useEffect(() => {
     void window.saturn.modules.snapshot().then((s) => setModuleTabs(s.settings));
     return window.saturn.modules.onChanged((s) => setModuleTabs(s.settings));
   }, []);
-  // Languages share one Languages section (a tab each inside it); extensions get their own sections.
-  const [languageIds, setLanguageIds] = useState<Set<string>>(new Set());
+  const languageTabs = moduleTabs.filter((t) => t.kind === 'language');
+  const extensionTabs = moduleTabs.filter((t) => t.kind === 'extension');
+  // A request for a module's own tab ("module:<id>") opens Languages or Extensions on it.
+  const [moduleId, setModuleId] = useState<string | null>(null);
+  const requestedId = section.startsWith(MODULE_PREFIX) ? section.slice(MODULE_PREFIX.length) : null;
   useEffect(() => {
-    const read = (s: ContributionSnapshot) => setLanguageIds(new Set(s.languages.map((l) => l.moduleId)));
-    void window.saturn.modules.snapshot().then(read);
-    return window.saturn.modules.onChanged(read);
-  }, []);
-  const languageTabs = moduleTabs.filter((t) => languageIds.has(t.moduleId));
-  const extensionTabs = moduleTabs.filter((t) => !languageIds.has(t.moduleId));
-  // A request for a language's own tab ("module:<id>") opens Languages on it.
-  const [languageId, setLanguageId] = useState<string | null>(null);
-  const requestedLanguage = section.startsWith(MODULE_PREFIX) ? languageTabs.find((t) => section === `${MODULE_PREFIX}${t.moduleId}`) : undefined;
-  useEffect(() => {
-    if (!requestedLanguage) return;
-    setLanguageId(requestedLanguage.moduleId);
-    setSection('languages');
-  }, [requestedLanguage?.moduleId]);
-  const moduleTab = extensionTabs.find((t) => section === `${MODULE_PREFIX}${t.moduleId}`);
+    if (!requestedId) return;
+    const isLanguage = languageTabs.some((t) => t.moduleId === requestedId);
+    if (!isLanguage && !extensionTabs.some((t) => t.moduleId === requestedId)) return;
+    setModuleId(requestedId);
+    setSection(isLanguage ? 'languages' : 'extensions');
+  }, [requestedId, moduleTabs]);
   const sections = [
     { id: 'appearance' as Section, label: 'Appearance' },
     { id: 'editor' as Section, label: 'Editor' },
     { id: 'languages' as Section, label: 'Languages' },
+    { id: 'extensions' as Section, label: 'Extensions' },
+    { id: 'notebooks' as Section, label: 'Notebooks' },
     { id: 'keymap' as Section, label: 'Keymap' },
     { id: 'marketplace' as Section, label: 'Marketplace' },
     { id: 'advanced' as Section, label: 'Advanced' },
-    // Tabs added by installed extensions, below a divider.
-    ...extensionTabs.map((t, i) => ({
-      id: `${MODULE_PREFIX}${t.moduleId}` as Section,
-      label: t.moduleName,
-      icon: <ModuleIcon icon={t.icon} badge={t.badge} />,
-      dividerBefore: i === 0,
-    })),
   ];
 
   return (
@@ -522,11 +540,12 @@ export function SettingsScreen({ embedded = false }: { embedded?: boolean }) {
         <main class="flex-1 p-4 overflow-y-auto">
           {section === 'appearance' && <AppearanceSection />}
           {section === 'editor' && <EditorSection />}
-          {section === 'languages' && <LanguagesSection tabs={languageTabs} selected={languageId} onSelect={setLanguageId} />}
+          {section === 'languages' && <ModulesSection tabs={languageTabs} selected={moduleId} onSelect={setModuleId} testId="settings-languages" />}
+          {section === 'extensions' && <ModulesSection tabs={extensionTabs} selected={moduleId} onSelect={setModuleId} testId="settings-extensions" />}
+          {section === 'notebooks' && <NotebookSettings setSection={setSection} />}
           {section === 'keymap' && <KeymapSection />}
           {section === 'marketplace' && <MarketplaceSection />}
           {section === 'advanced' && <AdvancedSection />}
-          {moduleTab && <ModuleSection key={moduleTab.moduleId} tab={moduleTab} />}
         </main>
       </div>
     </div>

@@ -16,9 +16,16 @@ interface TreeRowProps {
   /** Clicking the chevron; when set, only the chevron expands and the row click is free for opening. */
   onToggle?: () => void;
   onContextMenu?: (e: MouseEvent) => void;
+  onDragStart?: (e: DragEvent) => void;
+  onDragOver?: (e: DragEvent) => void;
+  onDragLeave?: (e: DragEvent) => void;
+  onDrop?: (e: DragEvent) => void;
+  dropTarget?: boolean;
+  dimmed?: boolean;
 }
 
-export function TreeRow({ depth, label, expanded, selected, icon, description, tooltip, onClick, onDoubleClick, onToggle, onContextMenu }: TreeRowProps) {
+export function TreeRow({ depth, label, expanded, selected, icon, description, tooltip, onClick, onDoubleClick, onToggle, onContextMenu, onDragStart, onDragOver, onDragLeave, onDrop, dropTarget, dimmed }: TreeRowProps) {
+  const background = dropTarget ? 'bg-hover outline outline-1 -outline-offset-1 outline-accent' : selected ? 'bg-selection text-strong' : 'hover:bg-hover';
   return (
     <div
       role="treeitem"
@@ -26,11 +33,16 @@ export function TreeRow({ depth, label, expanded, selected, icon, description, t
       aria-selected={selected}
       tabIndex={-1}
       title={tooltip}
+      draggable={!!onDragStart}
       onClick={onClick}
       onDblClick={onDoubleClick}
       onContextMenu={onContextMenu}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
       style={{ paddingLeft: `${8 + depth * 14}px` }}
-      class={`flex items-center gap-1 h-6 pr-2 cursor-pointer whitespace-nowrap ${selected ? 'bg-selection text-strong' : 'hover:bg-hover'}`}
+      class={`flex items-center gap-1 h-6 pr-2 cursor-pointer whitespace-nowrap ${background} ${dimmed ? 'opacity-50' : ''}`}
     >
       <span
         class="size-3.5 shrink-0 text-muted"

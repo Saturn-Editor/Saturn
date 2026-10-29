@@ -5,6 +5,7 @@ import {
 } from '@renderer/components';
 import { EMPTY_SNAPSHOT } from '@renderer/modules/ModuleBridge';
 import { CloneForm } from './WelcomeScreen';
+import { errorText, baseName } from '@renderer/helpers';
 
 const PLAIN_TEXT = 'plain-text';
 
@@ -59,7 +60,7 @@ export function NewProjectScreen() {
 
   // Opened from an editor: Create first asks whether to open the project in that window or a new one.
   const opener = window.saturn.window.projectPath;
-  const openerName = opener?.split(/[\\/]/).pop();
+  const openerName = opener ? baseName(opener) : undefined;
   const [choosing, setChoosing] = useState(false);
   const [cloning, setCloning] = useState(false);
   // Opening or cloning instead of creating: the project opens in its own window and this one closes.
@@ -82,7 +83,7 @@ export function NewProjectScreen() {
       });
     } catch (e) {
       // Electron prefixes IPC errors with "Error invoking remote method '…': Error: ".
-      setError(String((e as Error).message).replace(/^.*Error: /, ''));
+      setError(errorText(e));
       setBusy(false);
       setProgress(null);
     }

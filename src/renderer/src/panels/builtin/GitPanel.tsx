@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { GitCommit } from '@shared/types';
-import { Badge, Button, ContextMenu, TextInput } from '@renderer/components';
+import { Badge, Button, ContextMenu, TabMenu, TextInput } from '@renderer/components';
+import { HistoryPanel } from './HistoryPanel';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
-import { errorText, relativeTime, useGitStatus } from './gitState';
+import { relativeTime, useGitStatus } from './gitState';
+import { errorText } from '@renderer/helpers';
 import { GitRefs } from './GitRefs';
+import { RebaseDialog } from './RebaseDialog';
 
 type Details = { message: string; files: { status: string; path: string }[] };
 
@@ -14,6 +17,21 @@ type Details = { message: string; files: { status: string; path: string }[] };
  */
 export function GitPanel() {
   const ws = useWorkspace();
+  const tab = ws.gitTab.value;
+  return (
+    <div class="h-full flex flex-col min-h-0">
+      <TabMenu<'log' | 'history'>
+        tabs={[{ id: 'log', label: 'Log' }, { id: 'history', label: 'File History' }]}
+        active={tab}
+        onSelect={(t) => (ws.gitTab.value = t)}
+      />
+      <div class="flex-1 min-h-0">{tab === 'log' ? <GitLog /> : <HistoryPanel />}</div>
+    </div>
+  );
+}
+
+function GitLog() {
+  const ws = useWorkspace();
   const [status] = useGitStatus();
   const [commits, setCommits] = useState<GitCommit[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -23,6 +41,7 @@ export function GitPanel() {
   const [ref, setRef] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ commit: GitCommit; at: { x: number; y: number } } | null>(null);
   const [tagging, setTagging] = useState<GitCommit | null>(null);
+  const [rebasing, setRebasing] = useState<GitCommit | null>(null);
   const [tagName, setTagName] = useState('');
   const [tagMessage, setTagMessage] = useState('');
   const run = (task: Promise<void>, after?: () => void) => {
@@ -33,6 +52,7 @@ export function GitPanel() {
     if (id === 'cherry-pick') run(window.saturn.git.cherryPick(commit.hash));
     if (id === 'revert') run(window.saturn.git.revert(commit.hash));
     if (id === 'copy') void navigator.clipboard.writeText(commit.hash);
+    if (id === 'rebase') setRebasing(commit);
     if (id === 'tag') {
       setTagName('');
       setTagMessage('');
@@ -54,7 +74,7 @@ export function GitPanel() {
   }, [selected]);
 
   if (!status) return <p class="px-3 text-muted">Loading…</p>;
-  if (!status.repo) return <p class="px-3 text-muted">This project isn't a Git repository.</p>;
+  if (!status.repo) return <p class="px-3 text-muted">This {ws.noun} isn't a Git repository.</p>;
 
   return (
     <div class="h-full flex min-h-0" data-testid="git-panel">
@@ -93,6 +113,7 @@ export function GitPanel() {
             { id: 'cherry-pick', label: `Cherry-pick onto ${status.branch ?? 'HEAD'}`, testId: 'commit-cherry-pick' },
             { id: 'revert', label: 'Revert commit', testId: 'commit-revert' },
             { id: 'tag', label: 'New tag here…', testId: 'commit-tag' },
+            ...(ref === null ? [{ id: 'rebase', label: 'Interactive rebase from here…', testId: 'commit-rebase' }] : []),
             { separator: true },
             { id: 'copy', label: 'Copy hash' },
           ]}
@@ -100,6 +121,7 @@ export function GitPanel() {
           onClose={() => setMenu(null)}
         />
       )}
+      {rebasing && <RebaseDialog onto={rebasing} onClose={() => setRebasing(null)} />}
       {tagging && (
         <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30" data-testid="git-tag-form">
           <div class="w-96 p-3 bg-raised border border-border shadow-lg shadow-black/40 flex flex-col gap-2">

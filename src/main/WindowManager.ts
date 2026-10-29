@@ -1,5 +1,5 @@
 import { join, resolve } from 'node:path';
-import { app, BrowserWindow, dialog, type BrowserWindowConstructorOptions } from 'electron';
+import { app, BrowserWindow, dialog, shell, type BrowserWindowConstructorOptions } from 'electron';
 import { channel } from '@shared/api';
 import type { WindowKind } from '@shared/types';
 
@@ -20,8 +20,15 @@ export function windowIcon(): string {
 export class WindowManager {
   private welcome: BrowserWindow | null = null;
   private readonly editors = new Map<string, BrowserWindow>();
+  private readonly debugWindows = new Map<string, BrowserWindow>();
   private readonly singles = new Map<WindowKind, BrowserWindow>();
   private readonly dirty = new Set<number>();
+  private readonly closeConfirmed = new Set<number>();
+  private runningIn: (webContentsId: number) => string[] = () => [];
+
+  setRunningCheck(check: (webContentsId: number) => string[]): void {
+    this.runningIn = check;
+  }
   private quitting = false;
   /** Appearance → Text size, as a zoom factor applied to every window. */
   private zoom = 1;
@@ -53,18 +60,61 @@ export class WindowManager {
     return win;
   }
 
-  openEditor(projectPath: string): BrowserWindow {
+  openNotebook(notebookPath: string): BrowserWindow {
+    return this.openEditor(notebookPath, 'notebook');
+  }
+
+  openDebugWindow(projectPath: string): BrowserWindow | null {
+    const key = resolve(projectPath);
+    const owner = this.editors.get(key);
+    if (!owner) return null;
+    const existing = this.debugWindows.get(key);
+    if (existing && !existing.isDestroyed()) return existing;
+    const win = this.create('editor', { project: key, mode: 'debug' }, { width: 900, height: 700 });
+    this.debugWindows.set(key, win);
+    win.on('closed', () => this.debugWindows.delete(key));
+    owner.once('closed', () => this.closeDebugWindow(key));
+    return win;
+  }
+
+  closeDebugWindow(projectPath: string): void {
+    const win = this.debugWindows.get(resolve(projectPath));
+    if (win && !win.isDestroyed()) win.close();
+  }
+
+  debugWindowFor(projectPath: string): BrowserWindow | undefined {
+    return this.debugWindows.get(resolve(projectPath));
+  }
+
+  openEditor(projectPath: string, mode: 'project' | 'notebook' = 'project'): BrowserWindow {
     const key = resolve(projectPath);
     const existing = this.editors.get(key);
     if (existing && !existing.isDestroyed()) {
       existing.focus();
       return existing;
     }
-    const win = this.create('editor', { project: key });
+    const win = this.create('editor', { project: key, mode });
     this.editors.set(key, win);
     this.editorOpenedListeners.forEach((l) => l(key));
     win.on('close', (event) => {
-      if (!this.dirty.has(win.id)) return;
+      if (!this.dirty.has(win.id)) {
+        const running = this.runningIn(win.webContents.id);
+        if (!running.length || this.closeConfirmed.has(win.id)) return;
+        event.preventDefault();
+        const choice = dialog.showMessageBoxSync(win, {
+          type: 'warning',
+          message: `${[...new Set(running)].join(', ')} is still running in a terminal.`,
+          detail: 'Closing the window stops it.',
+          buttons: ['Close Anyway', 'Cancel'],
+          defaultId: 1,
+          cancelId: 1,
+        });
+        if (choice === 0) {
+          this.closeConfirmed.add(win.id);
+          win.close();
+        }
+        return;
+      }
       event.preventDefault();
       const choice = dialog.showMessageBoxSync(win, {
         type: 'warning',
@@ -134,6 +184,7 @@ export class WindowManager {
   /** The project path an editor window was opened for, or null for other windows. */
   projectOf(win: BrowserWindow): string | null {
     for (const [path, w] of this.editors) if (w === win) return path;
+    for (const [path, w] of this.debugWindows) if (w === win) return path;
     return null;
   }
 
@@ -173,6 +224,15 @@ export class WindowManager {
       },
     });
     win.webContents.on('did-finish-load', () => win.webContents.setZoomFactor(this.zoom));
+    win.webContents.setWindowOpenHandler(({ url }) => {
+      if (url.startsWith('https://')) void shell.openExternal(url);
+      return { action: 'deny' };
+    });
+    win.webContents.on('will-navigate', (e, url) => {
+      if (url === win.webContents.getURL()) return;
+      e.preventDefault();
+      if (url.startsWith('https://')) void shell.openExternal(url);
+    });
     win.once('ready-to-show', () => win.show());
     if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL);
     else void win.loadFile(join(import.meta.dirname, '../renderer/index.html'));

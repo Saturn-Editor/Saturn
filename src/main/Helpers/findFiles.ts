@@ -3,12 +3,20 @@ import { join, relative, sep } from 'node:path';
 
 const SKIP = new Set(['.git', 'node_modules']);
 
-/** Converts a glob like "**\/*.md" or "src/*.ts" to a RegExp matched against '/'-separated relative paths. */
+/** Converts a glob like "**\/*.md", "src/*.ts" or "**\/*.{test,spec}.js" to a RegExp matched against '/'-separated relative paths. */
 export function globToRegExp(glob: string): RegExp {
   let source = '';
+  let braces = 0;
   for (let i = 0; i < glob.length; i++) {
     const ch = glob[i];
-    if (ch === '*' && glob[i + 1] === '*') {
+    if (ch === '{') {
+      braces++;
+      source += '(?:';
+    } else if (ch === '}' && braces > 0) {
+      braces--;
+      source += ')';
+    } else if (ch === ',' && braces > 0) source += '|';
+    else if (ch === '*' && glob[i + 1] === '*') {
       source += glob[i + 2] === '/' ? '(?:.*/)?' : '.*';
       i += glob[i + 2] === '/' ? 2 : 1;
     } else if (ch === '*') source += '[^/]*';

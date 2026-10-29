@@ -2,6 +2,10 @@ import type { AppNotification, MessageKind, NotificationAction } from '@shared/m
 
 const MAX_NOTIFICATIONS = 100;
 
+export function visibleIn(n: AppNotification, projectPath: string | null): boolean {
+  return !n.projectPath || n.projectPath === projectPath;
+}
+
 /**
  * Notifications for this session (modules send them with `saturn.window.notify`; Saturn sends its
  * own, e.g. a missing tool). Kept in memory, newest first; listeners hear every change.
@@ -19,7 +23,7 @@ export class NotificationService {
     return this.items;
   }
 
-  add(n: { moduleId: string; title: string; message?: string; kind?: MessageKind; actions?: NotificationAction[] }): void {
+  add(n: { moduleId: string; projectPath?: string; title: string; message?: string; kind?: MessageKind; actions?: NotificationAction[] }): void {
     // Only https links can be opened from a notification.
     // Only Saturn itself may offer its own actions (restart to update, Marketplace updates).
     const actions = (n.actions ?? []).filter((a) => a.label && (a.command || a.openSettings || a.url?.startsWith('https://') ||
@@ -27,6 +31,7 @@ export class NotificationService {
     this.items = [{
       id: String(this.nextId++),
       moduleId: n.moduleId,
+      ...(typeof n.projectPath === 'string' && { projectPath: n.projectPath }),
       title: n.title,
       message: n.message ?? '',
       kind: n.kind ?? 'info',
@@ -46,14 +51,14 @@ export class NotificationService {
     this.emit();
   }
 
-  clear(): void {
-    this.items = [];
+  clear(projectPath: string | null = null): void {
+    this.items = this.items.filter((n) => !visibleIn(n, projectPath));
     this.emit();
   }
 
-  markAllRead(): void {
-    if (!this.items.some((n) => !n.read)) return;
-    this.items = this.items.map((n) => ({ ...n, read: true }));
+  markAllRead(projectPath: string | null = null): void {
+    if (!this.items.some((n) => !n.read && visibleIn(n, projectPath))) return;
+    this.items = this.items.map((n) => (visibleIn(n, projectPath) ? { ...n, read: true } : n));
     this.emit();
   }
 

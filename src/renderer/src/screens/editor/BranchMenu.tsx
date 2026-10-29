@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { GitRemote, GitTag } from '@shared/types';
 import { Button, ChevronDownIcon, Checkbox, ContextMenu, GitIcon, Select, TextInput, type MenuEntry } from '@renderer/components';
-import { errorText, useGitStatus } from '@renderer/panels/builtin/gitState';
+import { useGitStatus } from '@renderer/panels/builtin/gitState';
+import { errorText } from '@renderer/helpers';
 import { useWorkspace } from './EditorWorkspace';
 
 const NEW_BRANCH = '\0new';

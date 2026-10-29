@@ -38,6 +38,3 @@ export function relativeTime(iso: string): string {
   return 'just now';
 }
 
-export function errorText(e: unknown): string {
-  return String((e as Error).message).replace(/^.*Error: /, '');
-}

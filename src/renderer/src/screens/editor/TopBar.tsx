@@ -1,7 +1,5 @@
-import { useEffect, useState } from 'preact/hooks';
-import { DebugIcon, GearIcon, IconButton, LanguageBadges } from '@renderer/components';
+import { DebugIcon, GearIcon, IconButton } from '@renderer/components';
 import { ActionSearch } from '@renderer/commands/ActionSearch';
-import { projectBadges } from '@renderer/modules/ModuleBridge';
 import { RunMenu } from '@renderer/screens/editor/RunMenu';
 import { BranchMenu } from './BranchMenu';
 import { NotificationsMenu } from './NotificationsMenu';
@@ -10,32 +8,29 @@ import { useWorkspace } from './EditorWorkspace';
 
 export function TopBar() {
   const ws = useWorkspace();
-  const [languageIds, setLanguageIds] = useState<string[]>([]);
-
-  useEffect(() => {
-    void window.saturn.projects.recent().then((list) => setLanguageIds(list.find((p) => p.path === ws.projectPath)?.languageIds ?? []));
-  }, []);
-  const badges = projectBadges(ws.modules.snapshot.value, languageIds);
 
   return (
     <header class="flex items-center gap-3.5 h-10 px-2.5 bg-panel border-b border-divider shrink-0">
-      <div class="flex items-center gap-2 min-w-0 flex-1">
-        <LanguageBadges badges={badges} />
+      <div class="flex items-center gap-2 min-w-max flex-1">
         <ProjectMenu />
         <BranchMenu />
       </div>
       <ActionSearch />
-      <div class="flex items-center gap-2 flex-1 justify-end">
-        <RunMenu />
-        <IconButton
-          icon={<DebugIcon />}
-          label={ws.debug.state.value.state === 'stopped' ? 'Continue' : 'Debug the open file'}
-          active={ws.debug.state.value.state !== 'idle'}
-          data-testid="debug-button"
-          onClick={() => void ws.startDebugging()}
-        />
+      <div class="flex items-center gap-2 min-w-max flex-1 justify-end">
+        {!ws.isNotebook && (
+          <>
+            <RunMenu />
+            <IconButton
+              icon={<DebugIcon />}
+              label={ws.debug.state.value.state === 'stopped' ? 'Continue' : 'Debug the open file'}
+              active={ws.debug.state.value.state !== 'idle'}
+              data-testid="debug-button"
+              onClick={() => void ws.startDebugging()}
+            />
+          </>
+        )}
         <NotificationsMenu />
-        <IconButton icon={<GearIcon />} label="Settings" onClick={() => window.saturn.windows.openSettings()} />
+        <IconButton icon={<GearIcon />} label="Settings" onClick={() => window.saturn.windows.openSettings(ws.isNotebook ? 'notebooks' : undefined)} />
       </div>
     </header>
   );

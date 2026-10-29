@@ -9,13 +9,17 @@ import { BranchSwitchPrompt } from './BranchSwitchPrompt';
 import { StatusBar } from './StatusBar';
 import { UndoToast } from './UndoToast';
 import { TopBar } from './TopBar';
+import { DebugWindow } from './DebugWindow';
 
 export function EditorScreen() {
   const [ws, setWs] = useState<EditorWorkspace | null>(null);
 
   useEffect(() => {
     const workspace = new EditorWorkspace(window.saturn, window.saturn.window.projectPath!);
-    void workspace.load().then(() => setWs(workspace));
+    if (workspace.isDebugWindow) {
+      workspace.loadDebugWindow();
+      setWs(workspace);
+    } else void workspace.load().then(() => setWs(workspace));
   }, []);
 
   // Window-wide shortcuts from the chosen keymap (Save, Close Tab, Toggle Terminal…). Listening in the
@@ -34,6 +38,7 @@ export function EditorScreen() {
   }, [ws]);
 
   if (!ws) return null;
+  if (ws.isDebugWindow) return <WorkspaceContext.Provider value={ws}><DebugWindow /></WorkspaceContext.Provider>;
   ws.layout.state.value; // re-render on layout changes
   document.title = `${ws.projectName} – Saturn`;
 

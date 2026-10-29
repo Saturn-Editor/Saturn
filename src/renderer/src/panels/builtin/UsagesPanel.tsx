@@ -2,6 +2,7 @@ import { useState } from 'preact/hooks';
 import type { ReferenceLocation } from '@shared/modules';
 import { ChevronDownIcon, ChevronRightIcon } from '@renderer/components';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
+import { baseName } from '@renderer/helpers';
 
 /** Usages (bottom panel): the last Find Usages results, grouped by file; clicking one opens it there. */
 export function UsagesPanel() {
@@ -34,7 +35,7 @@ export function UsagesPanel() {
               }}
             >
               {open ? <ChevronDownIcon class="size-3.5 text-muted" /> : <ChevronRightIcon class="size-3.5 text-muted" />}
-              <span class="text-strong truncate">{path.split(/[\\/]/).pop()}</span>
+              <span class="text-strong truncate">{baseName(path)}</span>
               <span class="text-muted truncate flex-1">{relative(path)}</span>
               <span class="text-muted">{list.length}</span>
             </button>

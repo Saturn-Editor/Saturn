@@ -13,8 +13,8 @@ interface Server {
   process: ChildProcess;
   connection: MessageConnection;
   ready: Promise<unknown>;
-  /** Open documents (by URI) and their last version sent. */
-  versions: Map<string, number>;
+  /** Open documents (by URI) and the last version and text sent. */
+  versions: Map<string, { version: number; text: string }>;
 }
 
 interface LspRange {
@@ -174,8 +174,10 @@ export class LanguageServerService {
     if (!server) return null;
     await server.ready;
     const uri = pathToFileURL(req.path).href;
-    const version = (server.versions.get(uri) ?? 0) + 1;
-    server.versions.set(uri, version);
+    const last = server.versions.get(uri);
+    if (last?.text === req.text) return server;
+    const version = (last?.version ?? 0) + 1;
+    server.versions.set(uri, { version, text: req.text });
     if (version === 1) {
       void server.connection.sendNotification('textDocument/didOpen', {
         textDocument: { uri, languageId: req.languageId, version, text: req.text },
