@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { THEME_TOKENS } from '@shared/types';
-import { tokenRgba } from '@renderer/theme/ThemeApplier';
+import { themeVariables } from '@renderer/theme/ThemeApplier';
+import { errorText } from '@renderer/helpers';
 
 /**
  * Inside the page: `saturn.postMessage(message)` reaches the module's onMessage, and
@@ -24,8 +24,7 @@ const BRIDGE = `<script>
 const CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: https:; font-src data:">`;
 
 function themeStyle(): string {
-  const vars = THEME_TOKENS.map((t) => `--saturn-${t}: ${tokenRgba(t)};`).join(' ');
-  return `<style>:root { ${vars} } html, body { margin: 0; height: 100%; } body { font: 12px/1.5 system-ui, sans-serif;
+  return `<style>:root { ${themeVariables()} } html, body { margin: 0; height: 100%; } body { font: 12px/1.5 system-ui, sans-serif;
     background: var(--saturn-panel); color: var(--saturn-text); } a { color: var(--saturn-accent); }</style>`;
 }
 
@@ -42,7 +41,7 @@ export function WebviewPanel({ panelId }: { panelId: string }) {
 
   useEffect(() => {
     setProblem(null);
-    void window.saturn.modules.webviewHtml(panelId).then(setHtml, (e) => setProblem(String((e as Error).message).replace(/^.*Error: /, '')));
+    void window.saturn.modules.webviewHtml(panelId).then(setHtml, (e) => setProblem(errorText(e)));
   }, [panelId, version]);
 
   useEffect(() => {

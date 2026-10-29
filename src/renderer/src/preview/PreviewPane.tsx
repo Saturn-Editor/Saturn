@@ -1,14 +1,12 @@
-import { useEffect, useState } from 'preact/hooks';
-import { THEME_TOKENS } from '@shared/types';
-import { tokenRgba } from '@renderer/theme/ThemeApplier';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { themeVariables } from '@renderer/theme/ThemeApplier';
 import type { PreviewProvider } from './PreviewRegistry';
 
 const RENDER_DELAY_MS = 200;
 
 /** Theme colours as CSS variables inside the frame, so previews can match the editor. */
 function themeStyles(): string {
-  const vars = THEME_TOKENS.map((t) => `--saturn-${t}: ${tokenRgba(t)};`).join(' ');
-  return `:root { ${vars} } body { margin: 0; padding: 16px 20px; font: 13px/1.6 system-ui, sans-serif;
+  return `:root { ${themeVariables()} } body { margin: 0; padding: 16px 20px; font: 13px/1.6 system-ui, sans-serif;
     background: var(--saturn-editor); color: var(--saturn-text); } a { color: var(--saturn-accent); }`;
 }
 
@@ -17,10 +15,11 @@ interface PreviewPaneProps {
   text: string;
   path: string;
   projectPath: string;
+  refresh?: number;
 }
 
 /** Renders a file's preview into a sandboxed frame (no scripts), re-rendering as the text changes. */
-export function PreviewPane({ provider, text, path, projectPath }: PreviewPaneProps) {
+export function PreviewPane({ provider, text, path, projectPath, refresh }: PreviewPaneProps) {
   const [html, setHtml] = useState('');
   // True until the first render for this file finishes (later edits keep showing the last render).
   const [loading, setLoading] = useState(true);
@@ -32,6 +31,11 @@ export function PreviewPane({ provider, text, path, projectPath }: PreviewPanePr
     window.addEventListener('saturn:theme', bump);
     return () => window.removeEventListener('saturn:theme', bump);
   }, []);
+
+  const [settingsVersion, setSettingsVersion] = useState(0);
+  useEffect(() => window.saturn.modules.onSettingsChanged((moduleId) => {
+    if (moduleId === provider.source) setSettingsVersion((v) => v + 1);
+  }), [provider.source]);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,18 +57,27 @@ export function PreviewPane({ provider, text, path, projectPath }: PreviewPanePr
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [provider, text, path]);
+  }, [provider, text, path, settingsVersion, refresh]);
 
-  const doc = `<!doctype html><html><head><meta charset="utf-8"><style>${themeStyles()}</style></head><body>${html}</body></html>`;
+  const frame = useRef<HTMLIFrameElement>(null);
+  const shell = useMemo(() => `<!doctype html><html><head><meta charset="utf-8"><style>${themeStyles()}</style></head><body></body></html>`, [themeVersion]);
+  const fill = () => {
+    const body = frame.current?.contentDocument?.body;
+    if (body) body.innerHTML = html;
+  };
+  useEffect(fill, [html]);
+
   if (loading) {
     return <div class="w-full h-full flex items-center justify-center bg-editor text-muted" data-testid="file-preview-loading">Loading…</div>;
   }
   return (
     <iframe
+      ref={frame}
       key={themeVersion}
       title={`${provider.label} preview`}
-      sandbox=""
-      srcdoc={doc}
+      sandbox="allow-same-origin"
+      srcdoc={shell}
+      onLoad={fill}
       class="w-full h-full border-0 bg-editor"
       data-testid="file-preview"
     />

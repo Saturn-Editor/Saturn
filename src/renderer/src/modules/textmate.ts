@@ -6,10 +6,7 @@ import { INITIAL, parseRawGrammar, Registry, type IGrammar, type StateStack } fr
 import type { SyntaxRule } from '@shared/types';
 import { activeTheme, resolveColor } from '@renderer/theme/ThemeApplier';
 
-/**
- * Lines past this are left uncoloured, so huge files stay responsive. The whole file is
- * re-tokenized on each change; caching per-line grammar state is a later optimisation.
- */
+/** Lines past this are left uncoloured, so opening huge files stays responsive. */
 const MAX_LINES = 5000;
 
 let onig: Promise<void> | null = null;
@@ -114,61 +111,141 @@ function styleFor(scopes: string[], rules: SyntaxRule[]): SyntaxRule | null {
 const themeChanged = StateEffect.define<null>();
 const markCache = new Map<string, Decoration>();
 
+function cssFor(rule: SyntaxRule): string {
+  const styles = new Set((rule.fontStyle ?? '').split(/\s+/));
+  const lines = [styles.has('underline') && 'underline', styles.has('strikethrough') && 'line-through'].filter(Boolean);
+  return [
+    rule.color && `color: ${resolveColor(rule.color)};`,
+    styles.has('bold') && 'font-weight: 600;',
+    styles.has('italic') && 'font-style: italic;',
+    lines.length > 0 && `text-decoration: ${lines.join(' ')};`,
+  ].filter(Boolean).join(' ');
+}
+
 function markFor(rule: SyntaxRule): Decoration {
   const key = `${rule.color}|${rule.fontStyle ?? ''}`;
   let mark = markCache.get(key);
   if (!mark) {
-    const styles = new Set((rule.fontStyle ?? '').split(/\s+/));
-    const lines = [styles.has('underline') && 'underline', styles.has('strikethrough') && 'line-through'].filter(Boolean);
-    const style = [
-      rule.color && `color: ${resolveColor(rule.color)};`,
-      styles.has('bold') && 'font-weight: 600;',
-      styles.has('italic') && 'font-style: italic;',
-      lines.length > 0 && `text-decoration: ${lines.join(' ')};`,
-    ].filter(Boolean).join(' ');
-    mark = Decoration.mark({ attributes: { style } });
+    mark = Decoration.mark({ attributes: { style: cssFor(rule) } });
     markCache.set(key, mark);
   }
   return mark;
 }
 
-/** CodeMirror highlighting driven by a TextMate grammar and the active theme's syntax rules. */
+export async function highlightText(languageId: string, text: string): Promise<{ from: number; to: number; style: string }[]> {
+  const grammar = await loadGrammar(languageId).catch(() => null);
+  if (!grammar) return [];
+  const rules = activeTheme()?.syntax ?? [];
+  const spans: { from: number; to: number; style: string }[] = [];
+  let state: StateStack = INITIAL;
+  let offset = 0;
+  for (const line of text.split('\n').slice(0, MAX_LINES)) {
+    const result = grammar.tokenizeLine(line, state);
+    for (const token of result.tokens) {
+      const rule = styleFor(token.scopes, rules);
+      const end = Math.min(token.endIndex, line.length);
+      if (rule && end > token.startIndex) spans.push({ from: offset + token.startIndex, to: offset + end, style: cssFor(rule) });
+    }
+    state = result.ruleStack;
+    offset += line.length + 1;
+  }
+  return spans;
+}
+
+const scopeMarks = new Map<string, Decoration | null>();
+
+function markForScopes(scopes: string[], rules: SyntaxRule[]): Decoration | null {
+  const key = scopes.join(' ');
+  let mark = scopeMarks.get(key);
+  if (mark === undefined) {
+    const rule = styleFor(scopes, rules);
+    mark = rule ? markFor(rule) : null;
+    scopeMarks.set(key, mark);
+  }
+  return mark;
+}
+
+interface LineTokens {
+  marks: { from: number; to: number; mark: Decoration }[];
+  end: StateStack;
+}
+
 export function textMateHighlighting(grammar: IGrammar): Extension {
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
+      lines: LineTokens[] = [];
 
       constructor(view: EditorView) {
-        this.decorations = build(view);
+        this.retokenize(view, 0, []);
+        this.decorations = this.build(view);
       }
 
       update(update: ViewUpdate) {
         const recolour = update.transactions.some((t) => t.effects.some((e) => e.is(themeChanged)));
-        if (recolour) markCache.clear();
-        if (recolour || update.docChanged) this.decorations = build(update.view);
+        if (recolour) {
+          markCache.clear();
+          scopeMarks.clear();
+          this.lines = [];
+          this.retokenize(update.view, 0, []);
+        } else if (update.docChanged) {
+          const oldDoc = update.startState.doc;
+          const newDoc = update.state.doc;
+          let first = Infinity;
+          let lastOld = 0;
+          let lastNew = 0;
+          update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+            first = Math.min(first, oldDoc.lineAt(fromA).number - 1);
+            lastOld = Math.max(lastOld, oldDoc.lineAt(toA).number - 1);
+            lastNew = Math.max(lastNew, newDoc.lineAt(toB).number - 1);
+          });
+          const old = this.lines;
+          this.lines = old.slice(0, first);
+          this.retokenize(update.view, first, old, lastNew, lastNew - lastOld);
+        } else return;
+        this.decorations = this.build(update.view);
+      }
+
+      retokenize(view: EditorView, from: number, old: LineTokens[], settleAfter = -1, shift = 0) {
+        const rules = activeTheme()?.syntax ?? [];
+        const doc = view.state.doc;
+        const count = Math.min(doc.lines, MAX_LINES);
+        if (this.lines.length > count) this.lines.length = count;
+        from = Math.min(from, this.lines.length);
+        let state = from > 0 ? this.lines[from - 1].end : INITIAL;
+        for (let i = from; i < count; i++) {
+          const line = doc.line(i + 1);
+          const result = grammar.tokenizeLine(line.text, state);
+          const marks: LineTokens['marks'] = [];
+          for (const token of result.tokens) {
+            const mark = markForScopes(token.scopes, rules);
+            const end = Math.min(token.endIndex, line.length);
+            if (mark && end > token.startIndex) marks.push({ from: token.startIndex, to: end, mark });
+          }
+          this.lines.push({ marks, end: result.ruleStack });
+          state = result.ruleStack;
+          const previous = old[i - shift];
+          if (i > settleAfter && settleAfter >= 0 && previous && previous.end.equals(state)) {
+            this.lines.push(...old.slice(i - shift + 1, i - shift + 1 + (count - i - 1)));
+            if (this.lines.length === count) return;
+            state = this.lines[this.lines.length - 1].end;
+            i = this.lines.length - 1;
+          }
+        }
+      }
+
+      build(view: EditorView): DecorationSet {
+        const doc = view.state.doc;
+        const builder = new RangeSetBuilder<Decoration>();
+        this.lines.forEach((tokens, i) => {
+          const start = doc.line(i + 1).from;
+          for (const m of tokens.marks) builder.add(start + m.from, start + m.to, m.mark);
+        });
+        return builder.finish();
       }
     },
     { decorations: (v) => v.decorations },
   );
-
-  /** Tokenizes the whole document (up to MAX_LINES) and marks each token with its theme colour. */
-  function build(view: EditorView): DecorationSet {
-    const rules = activeTheme()?.syntax ?? [];
-    const doc = view.state.doc;
-    const builder = new RangeSetBuilder<Decoration>();
-    let state: StateStack = INITIAL;
-    for (let n = 1; n <= Math.min(doc.lines, MAX_LINES); n++) {
-      const line = doc.line(n);
-      const result = grammar.tokenizeLine(line.text, state);
-      for (const token of result.tokens) {
-        const rule = styleFor(token.scopes, rules);
-        const end = Math.min(token.endIndex, line.length);
-        if (rule && end > token.startIndex) builder.add(line.from + token.startIndex, line.from + end, markFor(rule));
-      }
-      state = result.ruleStack;
-    }
-    return builder.finish();
-  }
 }
 
 /** Asks every editor view to recolour after a theme change. */

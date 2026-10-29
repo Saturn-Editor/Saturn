@@ -4,20 +4,20 @@ import { basename, join, resolve } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { channel } from '@shared/api';
 import type { MarketplaceKind } from '@shared/marketplace';
-import { MANIFEST_FILES, SATURN_API_VERSION, type CompletionRequest, type DocumentRequest, type EditorEvent, type SettingValue, type TreeItem } from '@shared/modules';
-import type { AppFolder, AppInfo, AppSettings, Breakpoint, LayoutState, NewProjectRequest, RunEntry, ThemeMode } from '@shared/types';
+import { MANIFEST_FILES, SATURN_API_VERSION, type CompletionRequest, type DocumentRequest, type EditorEvent, type LanguageVersion, type SettingValue, type TestSet, type TreeItem } from '@shared/modules';
+import type { AppFolder, AppInfo, AppSettings, Breakpoint, LayoutState, NewProjectRequest, RebaseStep, RunEntry, ThemeMode } from '@shared/types';
 import type { AppPaths } from './Helpers/AppPaths';
 import type { ExtensionHostService } from './Services/ExtensionHostService';
 import { FileService } from './Services/FileService';
 import { GitService } from './Services/GitService';
 import type { LanguageServerService } from './Services/LanguageServerService';
 import { withLocalZip, type MarketplaceService } from './Services/MarketplaceService';
-import type { NotificationService } from './Services/NotificationService';
+import { visibleIn, type NotificationService } from './Services/NotificationService';
 import type { UpdateService } from './Services/UpdateService';
 import type { DebugService } from './Services/DebugService';
 import type { AskpassService } from './Services/AskpassService';
 import type { TrashService } from './Services/TrashService';
-import type { LanguageChoiceStore } from './Store/LanguageChoiceStore';
+import type { LanguageVersionStore } from './Store/LanguageVersionStore';
 import type { CodeModuleService } from './Services/CodeModuleService';
 import type { ProjectCreator } from './Services/ProjectCreator';
 import type { TerminalService } from './Services/TerminalService';
@@ -25,6 +25,7 @@ import type { ThemeService } from './Services/ThemeService';
 import type { LayoutStore } from './Store/LayoutStore';
 import type { RecentProjectsStore } from './Store/RecentProjectsStore';
 import type { RunConfigStore } from './Store/RunConfigStore';
+import type { TestSetStore } from './Store/TestSetStore';
 import type { SettingsStore } from './Store/SettingsStore';
 import type { WindowManager } from './WindowManager';
 
@@ -36,6 +37,7 @@ export interface SaturnServices {
   layouts: LayoutStore;
   terminals: TerminalService;
   runs: RunConfigStore;
+  testSets: TestSetStore;
   modules: CodeModuleService;
   host: ExtensionHostService;
   languageServers: LanguageServerService;
@@ -47,7 +49,7 @@ export interface SaturnServices {
   debug: DebugService;
   askpass: AskpassService;
   trash: TrashService;
-  languageChoices: LanguageChoiceStore;
+  languageVersions: LanguageVersionStore;
   /** Wipes Saturn's data and starts over as on a first launch (Settings → Reset Saturn, after confirming). */
   reset: () => Promise<void>;
 }
@@ -86,6 +88,7 @@ export class IpcRouter {
     this.handle('debug', 'setBreakpoints', (e, path: string, list: Breakpoint[]) => debug.setBreakpoints(this.projectOf(e), path, list));
     this.handle('debug', 'start', (e, req: { path: string; languageId: string; configuration?: string; processId?: number }) => debug.start(this.projectOf(e), req));
     this.handle('debug', 'setWatches', (e, expressions: string[]) => debug.setWatches(this.projectOf(e), expressions));
+    this.handle('debug', 'setExceptionFilters', (e, ids: string[]) => debug.setExceptionFilters(this.projectOf(e), ids));
     this.handle('debug', 'selectThread', (e, threadId: number) => debug.selectThread(this.projectOf(e), threadId));
     this.handle('debug', 'processes', () => debug.processes());
     this.handle('debug', 'stop', (e) => debug.stop(this.projectOf(e)));
@@ -106,10 +109,11 @@ export class IpcRouter {
 
   private registerNotifications(): void {
     const { notifications, host, windows } = this.services;
-    this.handle('notifications', 'list', () => notifications.list());
+    const windowProject = (e: IpcMainInvokeEvent) => windows.projectOf(this.senderWindow(e));
+    this.handle('notifications', 'list', (e) => notifications.list().filter((n) => visibleIn(n, windowProject(e))));
     this.handle('notifications', 'dismiss', (_e, id: string) => notifications.dismiss(id));
-    this.handle('notifications', 'clear', () => notifications.clear());
-    this.handle('notifications', 'markAllRead', () => notifications.markAllRead());
+    this.handle('notifications', 'clear', (e) => notifications.clear(windowProject(e)));
+    this.handle('notifications', 'markAllRead', (e) => notifications.markAllRead(windowProject(e)));
     // Runs one of a notification's actions; commands run in the sender's project.
     this.handle('notifications', 'act', async (e, id: string, index: number) => {
       const n = notifications.get(id);
@@ -139,6 +143,10 @@ export class IpcRouter {
     };
     this.handle('git', 'status', (e) => gitFor(e).status());
     this.handle('git', 'log', (e, ref?: string) => gitFor(e).log(200, ref));
+    this.handle('git', 'fileLog', (e, path: string) => gitFor(e).log(200, undefined, path));
+    this.handle('git', 'blame', (e, path: string) => gitFor(e).blame(path));
+    this.handle('git', 'rebaseCommits', (e, onto: string) => gitFor(e).rebaseCommits(onto));
+    this.handle('git', 'conflictVersions', (e, path: string) => gitFor(e).conflictVersions(path));
     this.handle('git', 'remoteBranches', (e) => gitFor(e).remoteBranches());
     this.handle('git', 'show', (e, hash: string) => gitFor(e).show(hash));
     this.handle('git', 'branches', (e) => gitFor(e).branches());
@@ -151,7 +159,7 @@ export class IpcRouter {
     // Pushing can take a while, so finishing posts a notification (which also pops up).
     const pushed = async (git: GitService, what: string) => {
       const { branch } = await git.status().catch(() => ({ branch: null }));
-      this.services.notifications.add({ moduleId: 'saturn', title: what === 'tags' ? 'Tags pushed' : `Pushed ${branch ?? 'branch'}`, message: what === 'tags' ? '' : `Your commits are on ${what}.` });
+      this.services.notifications.add({ moduleId: 'saturn', projectPath: git.root, title: what === 'tags' ? 'Tags pushed' : `Pushed ${branch ?? 'branch'}`, message: what === 'tags' ? '' : `Your commits are on ${what}.` });
     };
     changing('push', async (git) => {
       await git.push();
@@ -167,6 +175,7 @@ export class IpcRouter {
     changing('abortOperation', (git) => git.abortOperation());
     changing('continueOperation', (git) => git.continueOperation());
     changing('rebase', (git, onto: string) => git.rebase(onto));
+    changing('rebaseInteractive', (git, onto: string, steps: RebaseStep[]) => git.rebaseInteractive(onto, steps));
     changing('cherryPick', (git, hash: string) => git.cherryPick(hash));
     changing('revert', (git, hash: string) => git.revert(hash));
     this.handle('git', 'tags', (e) => gitFor(e).tags());
@@ -271,6 +280,8 @@ export class IpcRouter {
   sendToProject(projectPath: string, area: string, name: string, ...args: unknown[]): void {
     const win = this.services.windows.editorFor(projectPath);
     if (win) this.send(win.webContents, area, name, ...args);
+    const debugWin = area === 'debug' ? this.services.windows.debugWindowFor(projectPath) : undefined;
+    if (debugWin && !debugWin.isDestroyed()) this.send(debugWin.webContents, area, name, ...args);
   }
 
   /** Marketplace → Upload: asks for a folder or a .zip file to install; null if cancelled. */
@@ -302,11 +313,22 @@ export class IpcRouter {
     this.handle('languages', 'complete', (e, req: CompletionRequest) => languageServers.complete(this.projectOf(e), req));
     this.handle('languages', 'hover', (e, req: CompletionRequest) => languageServers.hover(this.projectOf(e), req));
     this.handle('languages', 'definition', (e, req: CompletionRequest) => languageServers.definition(this.projectOf(e), req));
-    // Languages picked for single files (status bar), per project; the window rebuilds its editors on change.
-    this.handle('languages', 'fileChoices', (e) => this.services.languageChoices.forProject(this.projectOf(e)));
-    this.handle('languages', 'setFileLanguage', async (e, path: string, languageId: string | null) => {
-      const choices = await this.services.languageChoices.set(this.projectOf(e), path, languageId);
-      this.send(e.sender, 'languages', 'choicesChanged', choices);
+    this.handle('languages', 'versions', (e) => this.services.languageVersions.forProject(this.projectOf(e)));
+    this.handle('languages', 'versionChoices', (e, languageId: string) => host.languageVersions(languageId, ctx(e)));
+    const chooseVersion = async (e: IpcMainInvokeEvent, languageId: string, version: LanguageVersion) => {
+      const projectPath = this.projectOf(e);
+      const all = await this.services.languageVersions.set(projectPath, languageId, version);
+      this.sendToProject(projectPath, 'languages', 'versionsChanged', all);
+      await host.languageVersionChanged(languageId, version, { projectPath });
+    };
+    this.handle('languages', 'setVersion', (e, languageId: string, version: LanguageVersion) => chooseVersion(e, languageId, version));
+    this.handle('languages', 'addVersion', async (e, languageId: string, title: string) => {
+      const picked = await dialog.showOpenDialog(this.senderWindow(e), { title, properties: ['openDirectory'] });
+      const folder = picked.canceled ? null : picked.filePaths[0];
+      if (!folder) return null;
+      const version = await host.languageVersionAdd(languageId, folder, ctx(e));
+      await chooseVersion(e, languageId, version);
+      return version;
     });
     this.handle('languages', 'symbols', (e, req: DocumentRequest) => languageServers.symbols(this.projectOf(e), req));
     this.handle('languages', 'references', (e, req: CompletionRequest) => languageServers.references(this.projectOf(e), req));
@@ -326,6 +348,18 @@ export class IpcRouter {
     this.handle('modules', 'runCommand', (e, id: string) => host.runCommand(id, ctx(e)));
     this.handle('modules', 'treeChildren', (e, panelId: string, parentId: string | null) => host.treeChildren(panelId, parentId, ctx(e)));
     this.handle('modules', 'treeAction', (e, panelId: string, actionId: string, item: TreeItem) => host.treeAction(panelId, actionId, item, ctx(e)));
+    this.handle('tests', 'discover', (e) => host.testsDiscover(ctx(e)));
+    this.handle('tests', 'cancel', (_e, runId: string) => host.testsCancel(runId));
+    this.handle('tests', 'sets', (e) => this.services.testSets.list(this.projectOf(e)));
+    this.handle('tests', 'saveSet', (e, set: TestSet) => this.services.testSets.save(this.projectOf(e), set));
+    this.handle('tests', 'removeSet', (e, name: string) => this.services.testSets.remove(this.projectOf(e), name));
+    this.handle('tests', 'debug', async (e, controllerId: string, ids: string[] | null) => {
+      const projectPath = this.projectOf(e);
+      const target = await host.testsDebug(controllerId, ids, { projectPath });
+      if (!target || typeof target.languageId !== 'string' || typeof target.launch !== 'object') throw new Error("The test runner didn't say how to debug these tests");
+      await this.services.debug.start(projectPath, { path: projectPath, languageId: target.languageId, launch: target.launch, name: target.name ?? 'Tests' });
+    });
+    this.handle('tests', 'run', (e, controllerId: string, ids: string[] | null, runId: string, coverage?: boolean) => host.testsRun(controllerId, ids, runId, ctx(e), !!coverage));
     this.handle('modules', 'renderPreview', (e, id: string, text: string, path: string) => host.renderPreview(id, text, { ...ctx(e), path }));
     this.handle('modules', 'templateFile', (e, id: string, name: string, dir: string) => host.templateFile(id, { ...ctx(e), name, dir }));
     this.handle('modules', 'webviewHtml', (e, panelId: string) => host.webviewHtml(panelId, ctx(e)));
@@ -368,6 +402,13 @@ export class IpcRouter {
     this.on('windows', 'openSettings', (e, section?: string) => windows.openSettings(this.senderWindow(e), section));
     this.on('windows', 'openNewProject', (e) => windows.openNewProject(this.senderWindow(e)));
     this.on('windows', 'openWelcome', () => windows.openWelcome());
+    this.on('windows', 'openDebugWindow', (e) => windows.openDebugWindow(this.projectOf(e)));
+    this.on('windows', 'closeDebugWindow', (e) => windows.closeDebugWindow(this.projectOf(e)));
+    this.on('windows', 'revealInProject', (e, path: string, line?: number) => {
+      const projectPath = this.projectOf(e);
+      this.sendToProject(projectPath, 'modules', 'openFile', path, line);
+      windows.editorFor(projectPath)?.focus();
+    });
     this.on('window', 'close', (e) => this.senderWindow(e).close());
     this.on('window', 'setDirty', (e, dirty: boolean) => windows.setDirty(this.senderWindow(e), dirty));
   }
@@ -442,7 +483,9 @@ export class IpcRouter {
       await openProject(path);
     });
     this.handle('projects', 'defaultParentDir', async () => {
-      const dev = join(homedir(), 'development');
+      const chosen = (await this.services.settings.app()).projectsFolder;
+      if (chosen && (await stat(chosen).then((s) => s.isDirectory(), () => false))) return chosen;
+      const dev = join(homedir(), 'SaturnProjects');
       return (await stat(dev).then((s) => s.isDirectory(), () => false)) ? dev : homedir();
     });
   }
@@ -503,6 +546,8 @@ export class IpcRouter {
     this.handle('fs', 'createFile', (e, path: string, text?: string) => this.filesFor(e).createFile(path, text));
     this.handle('fs', 'createDir', (e, path: string) => this.filesFor(e).createDir(path));
     this.handle('fs', 'rename', (e, path: string, newName: string) => this.filesFor(e).rename(path, newName));
+    this.handle('fs', 'move', (e, path: string, toDir: string) => this.filesFor(e).move(path, toDir));
+    this.handle('fs', 'copy', (e, path: string, toDir: string) => this.filesFor(e).copy(path, toDir));
     /** Deletes without asking; Undo (`undoTrash` with the returned id) can bring it back for 30 seconds. */
     this.handle('fs', 'trash', (e, path: string) => this.services.trash.remove(this.filesFor(e).entry(path)));
     this.handle('fs', 'undoTrash', (_e, id: string) => this.services.trash.undo(id));

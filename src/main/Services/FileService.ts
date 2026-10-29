@@ -1,6 +1,6 @@
 import { watch, type FSWatcher } from 'node:fs';
-import { mkdir, open, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { cp, mkdir, open, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { DirEntry, FileEncoding, FileReadResult } from '@shared/types';
 
 const MAX_TEXT_BYTES = 10 * 1024 * 1024;
@@ -74,6 +74,38 @@ export class FileService {
     if (target.toLowerCase() !== full.toLowerCase()) await this.assertFree(target);
     await rename(full, target);
     return target;
+  }
+
+  async move(path: string, toDir: string): Promise<string> {
+    const full = this.entry(path);
+    const dir = this.inside(toDir);
+    const target = join(dir, basename(full));
+    if (target === full) return full;
+    if (dir === full || dir.startsWith(full + sep)) throw new Error("A folder can't be moved into itself");
+    await this.assertFree(target);
+    await rename(full, target);
+    return target;
+  }
+
+  async copy(path: string, toDir: string): Promise<string> {
+    const full = this.entry(path);
+    const dir = this.inside(toDir);
+    if (dir === full || dir.startsWith(full + sep)) throw new Error("A folder can't be copied into itself");
+    const target = await this.freeName(dir, basename(full));
+    await cp(full, target, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true });
+    return target;
+  }
+
+  private async freeName(dir: string, name: string): Promise<string> {
+    const exists = (p: string) => stat(p).then(() => true, () => false);
+    if (!(await exists(join(dir, name)))) return join(dir, name);
+    const ext = extname(name);
+    const stem = ext && ext !== name ? name.slice(0, -ext.length) : name;
+    const suffix = ext && ext !== name ? ext : '';
+    for (let n = 1; ; n++) {
+      const candidate = join(dir, `${stem} copy${n > 1 ? ` ${n}` : ''}${suffix}`);
+      if (!(await exists(candidate))) return candidate;
+    }
   }
 
   /** The full path of a file or folder inside the project, for actions such as Delete; never the project folder itself. */

@@ -12,4 +12,5 @@ export { RadioList } from './RadioList';
 export { TreeRow } from './TreeRow';
 export { Menu, clickableCount, type MenuEntry } from './Menu';
 export { ContextMenu } from './ContextMenu';
+export { SearchMenu, type SearchMenuItem } from './SearchMenu';
 export { Splitter } from './Splitter';

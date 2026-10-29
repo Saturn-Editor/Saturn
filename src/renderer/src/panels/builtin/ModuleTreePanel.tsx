@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { TreeItem } from '@shared/modules';
 import { Badge, ContextMenu, TreeRow } from '@renderer/components';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
+import { errorText } from '@renderer/helpers';
 
 const ROOT = '\0root';
 
@@ -27,7 +28,7 @@ export function ModuleTreePanel({ panelId }: { panelId: string }) {
       setChildren((prev) => new Map(prev).set(parentId ?? ROOT, items));
       setError(null);
     } catch (e) {
-      setError(String((e as Error).message).replace(/^.*Error: /, ''));
+      setError(errorText(e));
     }
   };
 
@@ -40,7 +41,6 @@ export function ModuleTreePanel({ panelId }: { panelId: string }) {
         void load(itemId);
         return;
       }
-      setChildren(new Map());
       void load(null);
       expandedRef.current.forEach((p) => void load(p));
     });
@@ -102,7 +102,7 @@ export function ModuleTreePanel({ panelId }: { panelId: string }) {
         <ContextMenu
           at={menu}
           items={(menu.item.actions ?? []).map((a) => ({ id: a.id, label: a.label }))}
-          onPick={(actionId) => void window.saturn.modules.treeAction(panelId, actionId, menu.item).catch((e) => setError(String((e as Error).message).replace(/^.*Error: /, '')))}
+          onPick={(actionId) => void window.saturn.modules.treeAction(panelId, actionId, menu.item).catch((e) => setError(errorText(e)))}
           onClose={() => setMenu(null)}
         />
       )}

@@ -50,7 +50,7 @@ export function NoticesPanel() {
                 title={d.message}
                 onClick={() => void ws.documents.open(path, { line: d.line + 1, column: d.character + 1 })}
               >
-                <span class={`shrink-0 font-semibold ${d.severity === 'error' ? 'text-accent' : 'text-muted'}`}>{d.severity === 'error' ? 'Error' : 'Warning'}</span>
+                <span class={`shrink-0 font-semibold ${d.severity === 'error' ? 'text-error' : 'text-warning'}`}>{d.severity === 'error' ? 'Error' : 'Warning'}</span>
                 <span class="flex-1 truncate">{d.message}</span>
                 <span class="shrink-0 text-muted">{d.line + 1}:{d.character + 1}</span>
               </button>

@@ -22,6 +22,7 @@ import stop from '../../../../resources/icons/stop.svg?raw';
 import terminal from '../../../../resources/icons/terminal.svg?raw';
 import outline from '../../../../resources/icons/outline.svg?raw';
 import usages from '../../../../resources/icons/usages.svg?raw';
+import testsIcon from '../../../../resources/icons/tests.svg?raw';
 import debug from '../../../../resources/icons/debug.svg?raw';
 import stepOver from '../../../../resources/icons/step-over.svg?raw';
 import stepInto from '../../../../resources/icons/step-into.svg?raw';
@@ -65,6 +66,7 @@ export const FileIcon = svgIcon(file);
 /** Shown for a module's panel or button that has no icon. */
 export const OutlineIcon = svgIcon(outline);
 export const UsagesIcon = svgIcon(usages);
+export const TestsIcon = svgIcon(testsIcon);
 export const DebugIcon = svgIcon(debug);
 export const StepOverIcon = svgIcon(stepOver);
 export const StepIntoIcon = svgIcon(stepInto);

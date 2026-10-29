@@ -48,7 +48,7 @@ export function ActionSearch() {
   };
 
   return (
-    <div class="relative w-[420px] max-w-[45vw]">
+    <div class="relative w-[420px] min-w-24 shrink">
       <TextInput
         class="w-full"
         inputRef={input}

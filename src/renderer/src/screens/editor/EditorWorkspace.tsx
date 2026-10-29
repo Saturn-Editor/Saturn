@@ -4,9 +4,11 @@ import { useContext } from 'preact/hooks';
 import type { EditorView } from '@codemirror/view';
 import type { SaturnApi } from '@shared/api';
 import { applyTextEdits, type FileEdits, type MessageKind, type ReferenceLocation } from '@shared/modules';
-import { CollapseAllIcon, CommitIcon, DebugIcon, ExpandAllIcon, IconButton, RefreshIcon, FileIcon, FolderIcon, GitIcon, NoticesIcon, OutlineIcon, TerminalIcon, UsagesIcon } from '@renderer/components';
+import { TestsIcon, CollapseAllIcon, CommitIcon, DebugIcon, ExpandAllIcon, IconButton, RefreshIcon, FileIcon, FolderIcon, GitIcon, NoticesIcon, OutlineIcon, TerminalIcon, UsagesIcon } from '@renderer/components';
 import { DebugController } from '@renderer/panels/builtin/DebugController';
 import { DebugPanel } from '@renderer/panels/builtin/DebugPanel';
+import { TestsPanel } from '@renderer/panels/builtin/TestsPanel';
+import { TestsController } from '@renderer/panels/builtin/TestsController';
 import { findReferences, formatDocument, renameSymbol } from '@renderer/modules/languageServer';
 import { OutlinePanel } from '@renderer/panels/builtin/OutlinePanel';
 import { UsagesPanel } from '@renderer/panels/builtin/UsagesPanel';
@@ -17,14 +19,18 @@ import { FileTemplateRegistry, templateFileName } from '@renderer/editor/FileTem
 import { CommandRegistry } from '@renderer/commands/CommandRegistry';
 import { EditorDocuments } from '@renderer/editor/EditorDocuments';
 import { DockLayoutModel } from '@renderer/panels/DockLayoutModel';
-import { PanelRegistry } from '@renderer/panels/PanelRegistry';
+import { PanelRegistry, type PanelDefinition } from '@renderer/panels/PanelRegistry';
+import { emptyPage, PAGE_EXTENSION } from '@shared/notebooks';
 import { PreviewRegistry } from '@renderer/preview/PreviewRegistry';
 import { ModuleBridge } from '@renderer/modules/ModuleBridge';
 import { ProjectPanel } from '@renderer/panels/builtin/ProjectPanel';
 import { TerminalPanel } from '@renderer/panels/builtin/TerminalPanel';
 import { TerminalController } from '@renderer/panels/builtin/TerminalController';
+import { baseName } from '@renderer/helpers';
 
 const SAVE_DELAY_MS = 300;
+const NOTEBOOK_PANELS = new Set(['project', 'commit', 'git']);
+const DEBUG_PANELS = new Set(['debug']);
 
 /** Everything one editor window owns: panels, layout, open files, terminals and commands. */
 export class EditorWorkspace {
@@ -37,6 +43,8 @@ export class EditorWorkspace {
   readonly debug: DebugController;
   /** "<line>:<column>" of the active editor's cursor, shown in the status bar. */
   readonly cursor = signal('1:1');
+  readonly tests: TestsController;
+  readonly gitTab = signal<'log' | 'history'>('log');
   /** A message in the status bar (from a module, or a problem); click to dismiss. */
   readonly notice = signal<{ text: string; kind: MessageKind } | null>(null);
   readonly modules = new ModuleBridge(this);
@@ -59,14 +67,29 @@ export class EditorWorkspace {
 
   constructor(private readonly api: SaturnApi, readonly projectPath: string) {
     this.documents = new EditorDocuments(api);
+    this.tests = new TestsController(api);
+    this.documents.singlePage = this.isNotebook;
     this.terminals = new TerminalController(api, projectPath);
     this.debug = new DebugController(api, (frame) => void this.documents.open(frame.path!, { line: frame.line, column: frame.column }));
     this.registerBuiltInPanels();
     this.registerBuiltInCommands();
     const core = { source: 'core', icon: <FileIcon /> } as const;
-    this.fileTemplates.register({ ...core, id: 'core.text', label: 'Text file', kind: 'file', extension: '.txt', placeholder: 'File name' });
-    this.fileTemplates.register({ ...core, id: 'core.markdown', label: 'Markdown', kind: 'file', extension: '.md', placeholder: 'File name' });
+    const page = { ...core, id: 'notebook.page', kind: 'file', extension: PAGE_EXTENSION, placeholder: 'Page name', content: () => JSON.stringify(emptyPage()) } as const;
+    if (this.isNotebook) {
+      this.fileTemplates.register({ ...page, label: 'Page' });
+    } else {
+      this.fileTemplates.register({ ...core, id: 'core.text', label: 'Text file', kind: 'file', extension: '.txt', placeholder: 'File name' });
+      this.fileTemplates.register({ ...page, label: 'Notebook Page' });
+    }
     this.fileTemplates.register({ ...core, id: 'core.folder', label: 'Folder', kind: 'dir', icon: <FolderIcon />, placeholder: 'Folder name' });
+  }
+
+  get isNotebook(): boolean {
+    return this.api.window.mode === 'notebook';
+  }
+
+  get noun(): 'project' | 'notebook' {
+    return this.isNotebook ? 'notebook' : 'project';
   }
 
   /** Creates a file or folder from a template, then opens it if it's a file. Returns the new path. */
@@ -89,23 +112,42 @@ export class EditorWorkspace {
   }
 
   get projectName(): string {
-    return this.projectPath.split(/[\\/]/).pop() ?? this.projectPath;
+    return baseName(this.projectPath);
   }
 
   async load(): Promise<void> {
     // Modules first, so their panels are known before the saved layout is applied.
-    await this.modules.start();
+    if (!this.isNotebook) await this.modules.start();
     this.layout = new DockLayoutModel(this.panels, await this.api.layout.load());
     this.layout.clampTo({ width: window.innerWidth, height: window.innerHeight });
     this.layout.state.subscribe(() => this.scheduleSave());
+    if (!this.isNotebook) {
+      let separate = (await this.api.settings.get()).debugWindow === 'separate';
+      this.api.settings.onChanged((s) => (separate = s.debugWindow === 'separate'));
+      let wasActive = false;
+      this.debug.state.subscribe((s) => {
+        const active = s.state !== 'idle';
+        if (active === wasActive) return;
+        wasActive = active;
+        if (separate && active) this.api.windows.openDebugWindow();
+        else if (!active) this.api.windows.closeDebugWindow();
+        this.layout.setMode(active && !separate ? 'debug' : 'edit');
+      });
+    }
     this.panels.changed.subscribe(() => this.layout.sync());
     window.addEventListener('resize', () => this.layout.clampTo({ width: window.innerWidth, height: window.innerHeight }));
     // Branch switches, pulls, stashes…: editors without unsaved changes show the files' new contents.
     this.api.git.onChanged(() => void this.documents.reloadClean());
+    this.api.fs.onChanged((dir) => void this.documents.reloadClean(dir));
     this.api.window.onSaveAll(async () => {
       await this.documents.saveAll();
       this.api.window.close();
     });
+  }
+
+  async showCommitDiff(relativePath: string, hash: string): Promise<void> {
+    const diff = await this.api.git.diff(relativePath, hash);
+    this.documents.openDiff(`${hash}:${relativePath}`, `${baseName(relativePath)} (${hash.slice(0, 7)})`, { diff });
   }
 
   /** Shows the terminal panel wherever it's docked. */
@@ -179,10 +221,30 @@ export class EditorWorkspace {
     this.saveTimer = setTimeout(() => void this.api.layout.save(this.layout.toJSON()), SAVE_DELAY_MS);
   }
 
+  private registerPanel(def: PanelDefinition): void {
+    if (this.isDebugWindow ? DEBUG_PANELS.has(def.id) : !this.isNotebook || NOTEBOOK_PANELS.has(def.id)) this.panels.register(def);
+  }
+
+  get isDebugWindow(): boolean {
+    return this.api.window.mode === 'debug';
+  }
+
+  loadDebugWindow(): void {
+    this.layout = new DockLayoutModel(this.panels, null);
+    const open = this.documents.open.bind(this.documents);
+    this.documents.open = async (path, opts = {}) => {
+      if (path.startsWith(this.projectPath)) {
+        this.api.windows.revealInProject(path, opts.line);
+        return 'opened';
+      }
+      return open(path, opts);
+    };
+  }
+
   private registerBuiltInPanels(): void {
-    this.panels.register({
+    this.registerPanel({
       id: 'project',
-      title: 'Project',
+      title: this.isNotebook ? 'Notebook' : 'Project',
       icon: <FolderIcon />,
       defaultDock: 'left',
       source: 'core',
@@ -198,7 +260,7 @@ export class EditorWorkspace {
         );
       },
     });
-    this.panels.register({
+    this.registerPanel({
       id: 'commit',
       title: 'Commit',
       icon: <CommitIcon />,
@@ -206,7 +268,7 @@ export class EditorWorkspace {
       source: 'core',
       render: () => <CommitPanel />,
     });
-    this.panels.register({
+    this.registerPanel({
       id: 'git',
       title: 'Git',
       icon: <GitIcon />,
@@ -214,7 +276,7 @@ export class EditorWorkspace {
       source: 'core',
       render: () => <GitPanel />,
     });
-    this.panels.register({
+    this.registerPanel({
       id: 'notices',
       title: 'Notices',
       icon: <NoticesIcon />,
@@ -222,7 +284,7 @@ export class EditorWorkspace {
       source: 'core',
       render: () => <NoticesPanel />,
     });
-    this.panels.register({
+    this.registerPanel({
       id: 'outline',
       title: 'Outline',
       icon: <OutlineIcon />,
@@ -230,7 +292,7 @@ export class EditorWorkspace {
       source: 'core',
       render: () => <OutlinePanel />,
     });
-    this.panels.register({
+    this.registerPanel({
       id: 'usages',
       title: 'Usages',
       icon: <UsagesIcon />,
@@ -238,7 +300,7 @@ export class EditorWorkspace {
       source: 'core',
       render: () => <UsagesPanel />,
     });
-    this.panels.register({
+    this.registerPanel({
       id: 'debug',
       title: 'Debug',
       icon: <DebugIcon />,
@@ -246,7 +308,15 @@ export class EditorWorkspace {
       source: 'core',
       render: () => <DebugPanel />,
     });
-    this.panels.register({
+    this.registerPanel({
+      id: 'tests',
+      title: 'Tests',
+      icon: <TestsIcon />,
+      defaultDock: 'bottom',
+      source: 'core',
+      render: () => <TestsPanel />,
+    });
+    this.registerPanel({
       id: 'terminal',
       title: 'Terminal',
       icon: <TerminalIcon />,

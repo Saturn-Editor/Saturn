@@ -3,13 +3,14 @@ import { cp, readdir, readFile, rm } from 'node:fs/promises';
 import { ICON_FILES, ICON_SCHEME } from '@shared/modules';
 import { join } from 'node:path';
 import {
-  THEME_MODES, THEME_TOKENS, type Theme, type ThemeFile, type ThemeMode, type ThemeSummary, type ThemeVariant,
+  THEME_FONT, THEME_MODES, THEME_TOKENS, type Theme, type ThemeFile, type ThemeMode, type ThemeSummary, type ThemeVariant,
 } from '@shared/types';
 import type { SettingsStore } from '../Store/SettingsStore';
 
 interface LoadedTheme {
   theme: ThemeFile;
   builtIn: boolean;
+  missing: string[];
 }
 
 export const DEFAULT_THEME_ID = 'saturn';
@@ -27,22 +28,49 @@ export class ThemeService {
     private readonly systemMode: () => ThemeMode = () => 'dark',
   ) {}
 
-  static validVariant(v: unknown): v is ThemeVariant {
-    if (typeof v !== 'object' || v === null) return false;
-    const t = v as ThemeVariant;
-    return typeof t.colors === 'object' && t.colors !== null &&
-      THEME_TOKENS.every((token) => typeof t.colors[token] === 'string') &&
-      Array.isArray(t.syntax);
-  }
-
   static validate(v: unknown): v is ThemeFile {
     if (typeof v !== 'object' || v === null) return false;
     const t = v as ThemeFile;
-    const present = THEME_MODES.filter((m) => t[m] !== undefined);
-    return typeof t.id === 'string' && typeof t.name === 'string' &&
+    const present = THEME_MODES.filter((m) => typeof t[m] === 'object' && t[m] !== null);
+    return typeof t.id === 'string' && /^[a-z0-9][a-z0-9.-]*$/.test(t.id) && typeof t.name === 'string' &&
       (t.version === undefined || typeof t.version === 'string') &&
       (t.description === undefined || typeof t.description === 'string') &&
-      present.length > 0 && present.every((m) => ThemeService.validVariant(t[m]));
+      present.length > 0;
+  }
+
+  /** Fills anything missing or invalid from Saturn's own theme, listing what was filled. */
+  static complete(theme: ThemeFile, fallback: ThemeFile | undefined): { theme: ThemeFile; missing: string[] } {
+    const missing = new Set<string>();
+    const done: ThemeFile = { id: theme.id, name: theme.name, version: theme.version, description: theme.description };
+    for (const mode of THEME_MODES) {
+      const variant = theme[mode];
+      if (typeof variant !== 'object' || variant === null) continue;
+      const base = fallback?.[mode] ?? fallback?.[THEME_MODES.find((m) => fallback[m])!];
+      const colors = {} as ThemeVariant['colors'];
+      for (const token of THEME_TOKENS) {
+        const value = (variant.colors as Partial<ThemeVariant['colors']> | undefined)?.[token];
+        if (typeof value === 'string') colors[token] = value;
+        else {
+          missing.add(`${token} colour`);
+          colors[token] = base?.colors[token] ?? 'neutral-500';
+        }
+      }
+      const syntax = Array.isArray(variant.syntax) ? variant.syntax.filter((r) => typeof r?.scope === 'string') : null;
+      if (!syntax) missing.add('syntax colours');
+      done[mode] = { colors, syntax: syntax ?? base?.syntax ?? [] };
+    }
+    const fonts = typeof theme.fonts === 'object' && theme.fonts !== null ? theme.fonts : {};
+    for (const key of ['ui', 'editor'] as const) {
+      const value = fonts[key];
+      if (value === undefined) continue;
+      if (typeof value === 'string' && THEME_FONT.test(value)) done.fonts = { ...done.fonts, [key]: value };
+      else missing.add(`${key === 'ui' ? 'text' : 'code'} font (invalid)`);
+    }
+    return { theme: done, missing: [...missing] };
+  }
+
+  async incomplete(): Promise<{ name: string; missing: string[] }[]> {
+    return (await this.loadAll()).filter((t) => t.missing.length).map((t) => ({ name: t.theme.name, missing: t.missing }));
   }
 
   async list(): Promise<ThemeSummary[]> {
@@ -92,7 +120,7 @@ export class ThemeService {
       throw new Error('No valid theme.json in that folder');
     }
     if (!ThemeService.validate(parsed)) {
-      throw new Error('theme.json needs an id, a name, and a light or dark variant with every colour token');
+      throw new Error('theme.json needs an id, a name, and a light or dark variant');
     }
     if ((await this.loadAll()).some((t) => t.builtIn && t.theme.id === parsed.id)) {
       throw new Error(`${parsed.id} is a built-in theme and can't be replaced`);
@@ -116,9 +144,10 @@ export class ThemeService {
     const builtIn = await this.readThemes(await this.jsonFiles(this.builtInDir));
     const installedFiles = (await this.subdirs(this.installedDir)).map((d) => join(this.installedDir, d, 'theme.json'));
     const installed = await this.readThemes(installedFiles);
+    const fallback = builtIn.find((t) => t.id === DEFAULT_THEME_ID);
     return [
-      ...builtIn.map((theme) => ({ theme, builtIn: true })),
-      ...installed.map((theme) => ({ theme, builtIn: false })),
+      ...builtIn.map((raw) => ({ ...ThemeService.complete(raw, fallback), builtIn: true })),
+      ...installed.map((raw) => ({ ...ThemeService.complete(raw, fallback), builtIn: false })),
     ];
   }
 
@@ -172,5 +201,5 @@ function summary(theme: ThemeFile, builtIn: boolean, installedDir: string): Them
 function resolve(theme: ThemeFile, mode: ThemeMode): Theme {
   const type = theme[mode] ? mode : THEME_MODES.find((m) => theme[m])!;
   const { colors, syntax } = theme[type]!;
-  return { id: theme.id, name: theme.name, type, colors, syntax };
+  return { id: theme.id, name: theme.name, type, colors, syntax, fonts: theme.fonts ?? {} };
 }

@@ -34,6 +34,10 @@ export function tokenRgba(token: string): string {
   return `rgba(${r}, ${g}, ${b}, ${(a / 255).toFixed(3)})`;
 }
 
+export function themeVariables(): string {
+  return THEME_TOKENS.map((t) => `--saturn-${t}: ${tokenRgba(t)};`).join(' ');
+}
+
 let current: Theme | null = null;
 
 /** The theme applied to this window (null before the first apply). */
@@ -47,6 +51,10 @@ export class ThemeApplier {
     current = theme;
     for (const [token, value] of Object.entries(theme.colors)) {
       root.style.setProperty(`--saturn-${token}`, resolveColor(value));
+    }
+    for (const [name, value] of [['ui', theme.fonts.ui], ['editor', theme.fonts.editor]] as const) {
+      if (value) root.style.setProperty(`--saturn-font-${name}`, value);
+      else root.style.removeProperty(`--saturn-font-${name}`);
     }
     root.dataset.themeType = theme.type;
     root.dataset.themeId = theme.id;

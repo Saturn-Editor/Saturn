@@ -9,6 +9,7 @@ import { WebviewPanel } from '@renderer/panels/builtin/WebviewPanel';
 import type { EditorWorkspace } from '@renderer/screens/editor/EditorWorkspace';
 import { languageServerFeatures, receiveDiagnostics, setShowDiagnostics } from './languageServer';
 import { clearGrammars, loadGrammar, textMateHighlighting } from './textmate';
+import { baseName } from '@renderer/helpers';
 
 /** How long typing must pause before a file's new text reaches modules, and a selection change. */
 const EDITOR_REPORT_MS = 300;
@@ -18,33 +19,16 @@ export const EMPTY_SNAPSHOT: ContributionSnapshot = { languages: [], panels: [],
 
 export type LanguageInfo = ContributionSnapshot['languages'][number];
 
-/** A file language choice meaning "no language". */
-export const PLAIN_TEXT_LANGUAGE = 'plain-text';
-
-/** The languages claiming a file by extension (case-insensitive), each with the extension it matched. */
-export function languageCandidates(snapshot: ContributionSnapshot, path: string): { language: LanguageInfo; extension: string }[] {
-  const name = path.split(/[\\/]/).pop()?.toLowerCase() ?? '';
-  return snapshot.languages.flatMap((language) => {
-    const extension = language.extensions.map((e) => e.toLowerCase()).filter((e) => name.endsWith(e)).sort((a, b) => b.length - a.length)[0];
-    return extension ? [{ language, extension }] : [];
-  });
-}
-
-/**
- * The language a file opens as: the one picked for that file (status bar), else the one picked for
- * its extension when several languages claim it, else the first that claims it.
- */
-export function languageForPath(
-  snapshot: ContributionSnapshot,
-  path: string,
-  choices: { files?: Record<string, string>; extensions?: Record<string, string> } = {},
-): LanguageInfo | undefined {
-  const picked = choices.files?.[path];
-  if (picked === PLAIN_TEXT_LANGUAGE) return undefined;
-  const pickedLanguage = picked ? snapshot.languages.find((l) => l.id === picked) : undefined;
-  if (pickedLanguage) return pickedLanguage;
-  const candidates = languageCandidates(snapshot, path);
-  return (candidates.find((c) => choices.extensions?.[c.extension] === c.language.id) ?? candidates[0])?.language;
+/** The language a file opens as: the one claiming the longest matching extension (case-insensitive). */
+export function languageForPath(snapshot: ContributionSnapshot, path: string): LanguageInfo | undefined {
+  const name = baseName(path).toLowerCase();
+  let best: { language: LanguageInfo; length: number } | undefined;
+  for (const language of snapshot.languages) {
+    for (const ext of language.extensions) {
+      if (name.endsWith(ext.toLowerCase()) && (!best || ext.length > best.length)) best = { language, length: ext.length };
+    }
+  }
+  return best?.language;
 }
 
 /** Icons for a project's languages (installed ones only, one per language module, up to three); "T" for plain text. */
@@ -86,22 +70,13 @@ export class ModuleBridge {
     };
     const initial = await window.saturn.settings.get();
     read(initial);
-    // Language choices change which language a file opens as, so open editors rebuild.
-    this.extensionLanguages.value = initial.extensionLanguages;
-    this.fileLanguages.value = await window.saturn.languages.fileChoices();
-    window.saturn.languages.onChoicesChanged((choices) => {
-      this.fileLanguages.value = choices;
-      this.version.value++;
-    });
     setShowDiagnostics(initial.diagnostics);
     this.ws.documents.autoSave = initial.autoSave;
     window.addEventListener('blur', () => this.ws.documents.saveOnLeave());
     window.saturn.settings.onChanged((s) => {
       setShowDiagnostics(s.diagnostics);
       this.ws.documents.autoSave = s.autoSave;
-      const extensionsChanged = JSON.stringify(s.extensionLanguages) !== JSON.stringify(this.extensionLanguages.value);
-      this.extensionLanguages.value = s.extensionLanguages;
-      if (read(s) || extensionsChanged) this.version.value++;
+      if (read(s)) this.version.value++;
     });
     this.apply(await api.snapshot());
     api.onChanged((snapshot) => this.apply(snapshot));
@@ -175,13 +150,8 @@ export class ModuleBridge {
   }
 
   languageFor(path: string): LanguageInfo | undefined {
-    return languageForPath(this.snapshot.value, path, { files: this.fileLanguages.value, extensions: this.extensionLanguages.value });
+    return languageForPath(this.snapshot.value, path);
   }
-
-  /** Languages picked for single files in this project (path → language id, or PLAIN_TEXT_LANGUAGE). */
-  readonly fileLanguages = signal<Record<string, string>>({});
-  /** Settings: which language opens an extension several languages claim. */
-  readonly extensionLanguages = signal<Record<string, string>>({});
 
   /** Highlighting and completion for a file, from its language's module (empty for plain text). */
   async editorExtensions(path: string): Promise<Extension[]> {

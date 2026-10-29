@@ -16,7 +16,9 @@
       "accent": "amber-500",
       "on-accent": "neutral-950",
       "selection": "amber-500/22",
-      "hover": "black/4"
+      "hover": "black/4",
+      "error": "red-600",
+      "warning": "orange-500"
     },
     "syntax": [
       { "scope": "comment", "color": "neutral-400", "fontStyle": "italic" },
@@ -82,7 +84,9 @@
       "accent": "amber-500",
       "on-accent": "neutral-950",
       "selection": "amber-500/18",
-      "hover": "white/5"
+      "hover": "white/5",
+      "error": "red-500",
+      "warning": "orange-400"
     },
     "syntax": [
       { "scope": "comment", "color": "neutral-500", "fontStyle": "italic" },

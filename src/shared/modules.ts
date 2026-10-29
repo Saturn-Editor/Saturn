@@ -1,5 +1,6 @@
-/** The module API version this build of Saturn implements. Modules declare a compatible range in `saturnApi`. */
-export const SATURN_API_VERSION = '0.2.1';
+import { saturnApi } from '../../package.json';
+
+export const SATURN_API_VERSION = saturnApi;
 
 export interface ManifestLanguage {
   id: string;
@@ -9,6 +10,8 @@ export interface ManifestLanguage {
   grammar?: string;
   /** TextMate scope name of the grammar, e.g. "text.html.markdown". */
   scopeName?: string;
+  /** The module offers versions (e.g. JDKs) through saturn.languages.registerVersions; clicking the language in the status bar picks one per project. */
+  versions?: boolean;
 }
 
 export type LanguageFeature =
@@ -154,6 +157,74 @@ export interface ManifestSetting extends NewProjectField {
   description?: string;
 }
 
+export interface LanguageVersion {
+  id: string;
+  label: string;
+  detail?: string;
+}
+
+export interface LanguageVersionChoices {
+  items: LanguageVersion[];
+  addLabel?: string;
+}
+
+export const versionsProvider = (languageId: string) => `@versions:${languageId}`;
+
+export const RUN_PROVIDER = '@run';
+export const TESTS_PROVIDER = '@tests';
+
+export interface TestItem {
+  id: string;
+  label: string;
+  path?: string;
+  line?: number;
+  children?: TestItem[];
+}
+
+export interface TestResult {
+  id: string;
+  state: 'running' | 'passed' | 'failed' | 'skipped';
+  message?: string;
+  durationMs?: number;
+  label?: string;
+  parentId?: string;
+  path?: string;
+  line?: number;
+}
+
+export interface TestGroup {
+  controllerId: string;
+  moduleId: string;
+  label: string;
+  items: TestItem[];
+  error?: string;
+  canDebug?: boolean;
+  canCover?: boolean;
+}
+
+export interface TestSet {
+  name: string;
+  tests: { controllerId: string; id: string }[];
+}
+
+export interface TestDebugLaunch {
+  languageId: string;
+  launch: Record<string, unknown>;
+  name?: string;
+}
+
+export interface FileCoverage {
+  path: string;
+  covered: number[];
+  uncovered: number[];
+}
+
+export type TestEvent =
+  | { runId: string; kind: 'coverage'; controllerId: string; files: FileCoverage[] }
+  | { runId: string; kind: 'result'; controllerId: string; result: TestResult }
+  | { runId: string; kind: 'output'; controllerId: string; text: string }
+  | { runId: string; kind: 'done'; controllerId: string; error?: string };
+
 export type SettingValue = string | boolean;
 export type SettingValues = Record<string, SettingValue>;
 
@@ -208,6 +279,7 @@ interface CommonContributions {
   panels?: ManifestPanel[];
   commands?: ManifestCommand[];
   runConfigurations?: boolean;
+  tests?: boolean;
   settings?: ManifestSetting[];
   buttons?: ManifestButton[];
 }
@@ -264,7 +336,7 @@ export interface ContributionSnapshot {
   fileTemplates: (ManifestFileTemplate & { moduleId: string })[];
   newProject: (ManifestNewProject & ModuleLook & { moduleId: string; languageName: string })[];
   /** One Settings tab per module that declares settings. */
-  settings: (ModuleLook & { moduleId: string; moduleName: string; items: ManifestSetting[]; features: LanguageFeature[] })[];
+  settings: (ModuleLook & { kind: ModuleKind; moduleId: string; moduleName: string; items: ManifestSetting[]; features: LanguageFeature[] })[];
   /** Buttons on the editor's right-hand bar; `iconUrl` as for panels. */
   buttons: (ManifestButton & { moduleId: string; iconUrl: string | null })[];
   /** Languages that can be debugged, and with which module's debugger. */
@@ -292,6 +364,8 @@ export interface AppNotification {
   id: string;
   /** The module that sent it, or "saturn". */
   moduleId: string;
+  /** Shown only in this project's window; everywhere when left out. */
+  projectPath?: string;
   title: string;
   message: string;
   kind: MessageKind;
@@ -472,13 +546,11 @@ export interface ManifestRequirement {
   install?: string;
 }
 
-/** Is `version` within a caret range like "^0.1" or "^1.2.0"? Major 0 ranges also pin the minor. */
+/** Can a module needing `range` (e.g. "^0.2") run on API `version`? Same major, and a minor no newer than Saturn's; patches never matter. */
 export function satisfiesCaret(range: string, version: string): boolean {
   const match = /^\^?(\d+)(?:\.(\d+))?(?:\.(\d+))?$/.exec(range.trim());
   if (!match) return false;
-  const [maj, min = 0, pat = 0] = match.slice(1).map((n) => Number(n ?? 0));
-  const [vMaj, vMin, vPat] = version.split('.').map(Number);
-  if (vMaj !== maj) return false;
-  if (maj === 0 && vMin !== min) return false;
-  return vMin > min || (vMin === min && vPat >= pat);
+  const [maj, min = 0] = match.slice(1).map((n) => Number(n ?? 0));
+  const [vMaj, vMin] = version.split('.').map(Number);
+  return vMaj === maj && vMin >= min;
 }

@@ -17,10 +17,34 @@ const DOCKS: DockId[] = ['left', 'bottom'];
 /** Which panels live in which dock, which one is showing, and how big each dock is. */
 export class DockLayoutModel {
   readonly state = signal<LayoutState>(structuredClone(DEFAULTS));
+  readonly mode = signal<'edit' | 'debug'>('edit');
+  private other: Record<DockId, DockState> | null = null;
 
   constructor(private readonly registry: PanelRegistry, saved: LayoutState | null) {
-    if (saved) this.state.value = structuredClone(saved);
+    if (saved) {
+      this.state.value = { docks: structuredClone(saved.docks) };
+      if (saved.debugDocks?.left && saved.debugDocks.bottom) this.other = structuredClone(saved.debugDocks);
+    }
     this.sync();
+  }
+
+  /** Swaps between the editing layout and the debugging layout, keeping changes to each. */
+  setMode(mode: 'edit' | 'debug'): void {
+    if (mode === this.mode.value) return;
+    const current = this.state.value.docks;
+    const next = this.other ?? (mode === 'debug' ? this.debugDefaults(current) : structuredClone(DEFAULTS.docks));
+    this.other = structuredClone(current);
+    this.mode.value = mode;
+    this.state.value = { docks: structuredClone(next) };
+    this.sync();
+  }
+
+  private debugDefaults(edit: Record<DockId, DockState>): Record<DockId, DockState> {
+    const others = (list: string[]) => list.filter((p) => p !== 'debug');
+    return {
+      left: { ...edit.left, panels: others(edit.left.panels) },
+      bottom: { panels: ['debug', ...others(edit.bottom.panels)], active: 'debug', size: Math.max(edit.bottom.size, 300), open: true },
+    };
   }
 
   dockOf(panelId: string): DockId | null {
@@ -91,7 +115,9 @@ export class DockLayoutModel {
   }
 
   toJSON(): LayoutState {
-    return structuredClone(this.state.value);
+    const current = structuredClone(this.state.value.docks);
+    const other = this.other ? structuredClone(this.other) : undefined;
+    return this.mode.value === 'edit' ? { docks: current, debugDocks: other } : { docks: other ?? current, debugDocks: current };
   }
 
   private updateDock(dock: DockId, fn: (d: DockState) => DockState): void {

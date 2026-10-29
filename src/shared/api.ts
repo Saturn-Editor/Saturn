@@ -1,11 +1,13 @@
 import type {
-  AppFolder, AppInfo, AppSettings, Breakpoint, DebugState, DebugVariable, DirEntry, GitCommit, GitRemote, GitStash, GitStatus, GitTag, WorkingDiff, UpdateStatus, FileReadResult, LayoutState, NewProjectRequest, RecentProject,
+  AppFolder, AppInfo, AppSettings, BlameLine, Breakpoint, ConflictVersions, RebaseStep, DebugState, DebugVariable, DirEntry, GitCommit, GitRemote, GitStash, GitStatus, GitTag, WorkingDiff, UpdateStatus, FileReadResult, LayoutState, NewProjectRequest, RecentProject,
   RunEntry, Theme, ThemeMode, ThemeSummary, Unsubscribe, WindowKind,
 } from './types';
+import type { NotebookFolder, NotebookSummary, PageStyle } from './notebooks';
 import type {
   AppNotification, CompletionItem, CompletionRequest, ContributionSnapshot, Diagnostic, DocumentRequest, EditorEvent, DocumentSymbol, FileEdits, ModuleMessage,
   ModuleSummary, ReferenceLocation, SettingValue, SettingValues, SignatureHelp, SourceLocation, TextEdit, TreeItem,
 } from './modules';
+import type { LanguageVersion, LanguageVersionChoices, TestEvent, TestGroup, TestSet } from './modules';
 import type { MarketplaceEntry, MarketplaceKind } from './marketplace';
 
 export const CHANNEL_PREFIX = 'saturn:';
@@ -27,6 +29,7 @@ export interface SaturnApi {
   window: {
     kind: WindowKind;
     projectPath: string | null;
+    mode: 'project' | 'notebook' | 'debug';
     /** Which section a Settings or Marketplace window should open on, if given. */
     section: string | null;
     setDirty(dirty: boolean): void;
@@ -41,6 +44,9 @@ export interface SaturnApi {
     /** Shows the Welcome window (Saturn's home: projects, New, Open, Clone), opening it if it's closed. */
     openWelcome(): void;
     openMarketplace(section?: 'themes' | 'languages' | 'extensions'): void;
+    openDebugWindow(): void;
+    closeDebugWindow(): void;
+    revealInProject(path: string, line?: number): void;
   };
   /** Installed languages, and what they do in the editor (highlighting and language servers). */
   languages: InstallableModules & {
@@ -51,11 +57,11 @@ export interface SaturnApi {
     hover(req: CompletionRequest): Promise<string | null>;
     /** Where the symbol at a position is defined, or null. */
     definition(req: CompletionRequest): Promise<SourceLocation | null>;
-    /** Languages picked for single files in this project: path → language id ("plain-text" for none). */
-    fileChoices(): Promise<Record<string, string>>;
-    /** Picks a file's language ("plain-text" for none), or (null) goes back to choosing by extension. */
-    setFileLanguage(path: string, languageId: string | null): Promise<void>;
-    onChoicesChanged(cb: (choices: Record<string, string>) => void): Unsubscribe;
+    versions(): Promise<Record<string, LanguageVersion>>;
+    versionChoices(languageId: string): Promise<LanguageVersionChoices>;
+    setVersion(languageId: string, version: LanguageVersion): Promise<void>;
+    addVersion(languageId: string, title: string): Promise<LanguageVersion | null>;
+    onVersionsChanged(cb: (versions: Record<string, LanguageVersion>) => void): Unsubscribe;
     /** Everything defined in a file, nested, for the Outline panel. */
     symbols(req: DocumentRequest): Promise<DocumentSymbol[]>;
     /** Every usage of the symbol at a position, declaration included. */
@@ -132,6 +138,7 @@ export interface SaturnApi {
     processes(): Promise<{ pid: number; name: string }[]>;
     /** Sets the watch expressions; they're evaluated whenever the program pauses. */
     setWatches(expressions: string[]): Promise<void>;
+    setExceptionFilters(ids: string[]): Promise<void>;
     /** Shows another thread's stack while paused. */
     selectThread(threadId: number): Promise<void>;
     stop(): Promise<void>;
@@ -164,6 +171,11 @@ export interface SaturnApi {
     status(): Promise<GitStatus>;
     /** History of the current branch, or of `ref` (a branch or tag). */
     log(ref?: string): Promise<GitCommit[]>;
+    fileLog(path: string): Promise<GitCommit[]>;
+    blame(path: string): Promise<BlameLine[]>;
+    rebaseCommits(onto: string): Promise<GitCommit[]>;
+    rebaseInteractive(onto: string, steps: RebaseStep[]): Promise<void>;
+    conflictVersions(path: string): Promise<ConflictVersions>;
     show(hash: string): Promise<{ message: string; files: { status: string; path: string }[] }>;
     branches(): Promise<string[]>;
     init(): Promise<void>;
@@ -283,6 +295,33 @@ export interface SaturnApi {
     onChanged(cb: (t: Theme) => void): Unsubscribe;
     onListChanged(cb: () => void): Unsubscribe;
   };
+  tests: {
+    discover(): Promise<TestGroup[]>;
+    run(controllerId: string, ids: string[] | null, runId: string, coverage?: boolean): Promise<void>;
+    cancel(runId: string): Promise<void>;
+    debug(controllerId: string, ids: string[] | null): Promise<void>;
+    sets(): Promise<TestSet[]>;
+    saveSet(set: TestSet): Promise<TestSet[]>;
+    removeSet(name: string): Promise<TestSet[]>;
+    onEvent(cb: (event: TestEvent) => void): Unsubscribe;
+  };
+  notebooks: {
+    list(): Promise<NotebookSummary[]>;
+    create(name: string): Promise<string>;
+    folder(): Promise<NotebookFolder>;
+    chooseFolder(): Promise<NotebookFolder>;
+    resetFolder(): Promise<NotebookFolder>;
+    style(): Promise<PageStyle>;
+    setStyle(style: PageStyle): Promise<PageStyle>;
+    countIn(folder: string): Promise<number>;
+    moveFrom(folder: string): Promise<{ moved: number; skipped: string[] }>;
+    openSettings(): Promise<void>;
+    openDialog(): Promise<boolean>;
+    open(path: string): Promise<void>;
+    remove(path: string): Promise<void>;
+    delete(path: string): Promise<void>;
+    name(): Promise<string | null>;
+  };
   fs: {
     readDir(path: string): Promise<DirEntry[]>;
     readFile(path: string, opts?: { force?: boolean }): Promise<FileReadResult>;
@@ -292,6 +331,8 @@ export interface SaturnApi {
     createDir(path: string): Promise<void>;
     /** Renames in place; resolves to the new path. */
     rename(path: string, newName: string): Promise<string>;
+    move(path: string, toDir: string): Promise<string>;
+    copy(path: string, toDir: string): Promise<string>;
     /** Deletes without asking; resolves to an id that `undoTrash` accepts for 30 seconds, after which it's in the system Trash. */
     trash(path: string): Promise<string>;
     /** Puts a deleted file or folder back; resolves to its path. */

@@ -1,5 +1,6 @@
 import { signal } from '@preact/signals';
 import type { ViewMode } from '@shared/modules';
+import { baseName } from '@renderer/helpers';
 
 export type { ViewMode };
 
@@ -42,7 +43,7 @@ export class PreviewRegistry {
 
   /** The provider for a file, by its extension (case-insensitive), if any language previews it. */
   for(path: string): PreviewProvider | undefined {
-    const name = path.split(/[\\/]/).pop()?.toLowerCase() ?? '';
+    const name = baseName(path).toLowerCase();
     return [...this.providers.values()].find((p) => p.extensions.some((ext) => name.endsWith(ext.toLowerCase())));
   }
 }

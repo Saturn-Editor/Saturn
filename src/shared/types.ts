@@ -4,7 +4,7 @@ export type WindowKind = 'welcome' | 'editor' | 'settings' | 'new-project' | 'ma
 
 export const THEME_TOKENS = [
   'app', 'editor', 'panel', 'raised', 'divider', 'border', 'text',
-  'strong', 'muted', 'accent', 'on-accent', 'selection', 'hover',
+  'strong', 'muted', 'accent', 'on-accent', 'selection', 'hover', 'error', 'warning',
 ] as const;
 export type ThemeTokens = (typeof THEME_TOKENS)[number];
 
@@ -70,6 +70,24 @@ export interface GitRemote {
   url: string;
 }
 
+export interface BlameLine {
+  hash: string;
+  author: string;
+  time: number;
+  summary: string;
+}
+
+export interface RebaseStep {
+  hash: string;
+  action: 'pick' | 'squash' | 'fixup' | 'edit' | 'drop';
+}
+
+export interface ConflictVersions {
+  base: string;
+  ours: string;
+  theirs: string;
+}
+
 export interface GitCommit {
   hash: string;
   short: string;
@@ -99,6 +117,14 @@ export interface Breakpoint {
   line: number;
   condition?: string;
   logMessage?: string;
+  enabled?: boolean;
+}
+
+export interface ExceptionFilter {
+  id: string;
+  label: string;
+  description?: string;
+  enabled: boolean;
 }
 
 /** A stack frame of the paused program; `line` and `column` are 1-based, `path` null for code without a file. */
@@ -138,6 +164,8 @@ export interface DebugState {
   threadId?: number;
   /** Watch expressions and their values in the selected frame (values only while paused). */
   watches: DebugWatch[];
+  exceptionFilters?: ExceptionFilter[];
+  metrics?: { pid: number; samples: { seconds: number; cpu: number; memoryMb: number }[] };
 }
 
 export interface DebugWatch {
@@ -176,10 +204,11 @@ export interface AppSettings {
   customKeymaps: CustomKeymap[];
   /** Typing an opening bracket or quote also inserts the closer. */
   autoCloseBrackets: boolean;
-  /** Which language opens a file extension several installed languages claim, by extension (e.g. ".h": "cpp"). */
-  extensionLanguages: Record<string, string>;
   /** Switching branches with uncommitted changes: ask each time, bring them to the new branch, or shelve them for the old one. */
   branchSwitch: BranchSwitchMode;
+  debugWindow: 'docked' | 'separate';
+  diffLayout: 'split' | 'unified';
+  projectsFolder: string | null;
   /** Saving a file (Save File) formats it first with its language server, where the language supports it. */
   formatOnSave: boolean;
   /** Interface and editor text size as a percentage (100 is the default); scales every window. */
@@ -226,13 +255,22 @@ export interface ThemeVariant {
 }
 
 /** A theme.json file: one theme with a light and/or a dark variant (at least one). */
-export type ThemeFile = { id: string; name: string; version?: string; description?: string } & Partial<Record<ThemeMode, ThemeVariant>>;
+export type ThemeFile = { id: string; name: string; version?: string; description?: string; fonts?: ThemeFonts } & Partial<Record<ThemeMode, ThemeVariant>>;
+
+/** CSS font-family lists; "OpenDyslexic" is bundled with Saturn. */
+export interface ThemeFonts {
+  ui?: string;
+  editor?: string;
+}
+
+export const THEME_FONT = /^[\w\s,'"-]{1,200}$/;
 
 /** The active theme resolved to one variant: the user's Light/Dark mode, or the only variant it has. */
 export interface Theme extends ThemeVariant {
   id: string;
   name: string;
   type: ThemeMode;
+  fonts: ThemeFonts;
 }
 
 export interface ThemeSummary {
@@ -279,6 +317,7 @@ export interface DockState {
 
 export interface LayoutState {
   docks: Record<DockId, DockState>;
+  debugDocks?: Record<DockId, DockState>;
 }
 
 export interface DirEntry {

@@ -1,47 +1,63 @@
 import { useRef, useState } from 'preact/hooks';
-import type { RecentProject } from '@shared/types';
 import { Button, ChevronDownIcon, ContextMenu, type MenuEntry } from '@renderer/components';
 import { useWorkspace } from './EditorWorkspace';
 
 const CLOSE = '\0close';
 const NEW = '\0new';
+const OPEN = '\0open';
 
 /**
- * The project name in the top bar. Its menu has New Project (which asks, on Create, whether to open it
- * here or in a new window), Close Project, then the other recent projects. Picking one asks whether to
- * open it in this window (closing this project, with the usual unsaved-changes prompt) or a new one.
+ * The project or notebook name in the top bar. Its menu has New and Open Project (projects only), Close,
+ * then the other recent projects and notebooks. Picking one asks whether to open it in this window or a new one.
  */
+interface Target {
+  kind: 'project' | 'notebook';
+  name: string;
+  path: string;
+}
+
 export function ProjectMenu() {
   const ws = useWorkspace();
   const [open, setOpen] = useState(false);
-  const [recent, setRecent] = useState<RecentProject[]>([]);
-  const [choosing, setChoosing] = useState<RecentProject | null>(null);
+  const [projects, setProjects] = useState<Target[]>([]);
+  const [notebooks, setNotebooks] = useState<Target[]>([]);
+  const [choosing, setChoosing] = useState<Target | null>(null);
   const anchor = useRef<HTMLButtonElement>(null);
 
   const toggle = () => {
-    if (!open) void window.saturn.projects.recent().then(setRecent);
+    if (!open) {
+      const usable = (list: { name: string; path: string; missing: boolean }[], kind: Target['kind']) =>
+        list.filter((t) => t.path !== ws.projectPath && !t.missing).map((t) => ({ kind, name: t.name, path: t.path }));
+      void window.saturn.projects.recent().then((list) => setProjects(usable(list, 'project')));
+      void window.saturn.notebooks.list().then((list) => setNotebooks(usable(list, 'notebook')));
+    }
     setOpen(!open);
   };
 
-  const others = recent.filter((p) => p.path !== ws.projectPath && !p.missing);
+  const targetItem = (t: Target) => ({ id: `${t.kind}:${t.path}`, label: t.name, hint: t.path, testId: `${t.kind}-switch-${t.name}` });
   const items: MenuEntry[] = [
-    { id: NEW, label: 'New Project…', testId: 'project-new' },
-    { id: CLOSE, label: 'Close Project', testId: 'project-close' },
-    ...(others.length ? [{ separator: true } as const, { group: 'Switch to' } as const] : []),
-    ...others.map((p) => ({ id: p.path, label: p.name, hint: p.path, testId: `project-switch-${p.name}` })),
+    ...(ws.isNotebook ? [] : [
+      { id: NEW, label: 'New Project…', testId: 'project-new' },
+      { id: OPEN, label: 'Open Project…', testId: 'project-open' },
+    ]),
+    { id: CLOSE, label: ws.isNotebook ? 'Close Notebook' : 'Close Project', testId: 'project-close' },
+    ...(projects.length ? [{ separator: true } as const, { group: 'Switch to' } as const, ...projects.map(targetItem)] : []),
+    ...(notebooks.length ? [{ separator: true } as const, { group: 'Notebooks' } as const, ...notebooks.map(targetItem)] : []),
   ];
 
   const pick = (id: string) => {
     if (id === NEW) return window.saturn.windows.openNewProject();
+    if (id === OPEN) return void window.saturn.projects.openDialog();
     if (id === CLOSE) return window.saturn.window.close();
-    setChoosing(others.find((p) => p.path === id) ?? null);
+    setChoosing([...projects, ...notebooks].find((t) => `${t.kind}:${t.path}` === id) ?? null);
   };
 
-  /** Opens the chosen project; in this window means closing this project once the other has opened. */
   const openChosen = async (here: boolean) => {
-    const project = choosing;
+    const target = choosing;
     setChoosing(null);
-    if (!project || (await window.saturn.projects.openPath(project.path)) !== 'opened') return;
+    if (!target) return;
+    if (target.kind === 'notebook') await window.saturn.notebooks.open(target.path);
+    else if ((await window.saturn.projects.openPath(target.path)) !== 'opened') return;
     if (here) window.saturn.window.close();
   };
 

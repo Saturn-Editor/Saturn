@@ -1,5 +1,5 @@
 <center>
-  <img src="/resources/icons/Logo-Dark.svg" style="margin-left: auto; margin-right: auto;" alt="Saturn">
+  <img src="/resources/icons/Logo-Dark.png" style="margin-left: auto; margin-right: auto;" alt="Saturn">
 </center>
 
 # Say hello to Saturn

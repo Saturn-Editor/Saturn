@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { DebugVariable } from '@shared/types';
+import type { Breakpoint, DebugVariable } from '@shared/types';
 import {
-  Button, CloseIcon, ContinueIcon, IconButton, PauseIcon, PlayIcon, Select, StepIntoIcon, StepOutIcon, StepOverIcon, StopIcon, TextInput, TreeRow,
+  Button, Checkbox, CloseIcon, TabMenu, ContinueIcon, IconButton, PauseIcon, PlayIcon, Select, StepIntoIcon, StepOutIcon, StepOverIcon, StopIcon, TextInput, TreeRow,
 } from '@renderer/components';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
+import { errorText, baseName } from '@renderer/helpers';
+import { DiagnosticsPanel } from './DiagnosticsPanel';
 
 /** A variable; expanding one with children fetches them. */
 function VariableRow({ variable, depth }: { variable: DebugVariable; depth: number }) {
@@ -65,8 +67,104 @@ function DebugConsole() {
   );
 }
 
-/** Debug (bottom panel): controls, the paused call stack, its variables, and the program's console. */
-export function DebugPanel() {
+export function VariablesPanel() {
+  const { debug } = useWorkspace();
+  const s = debug.state.value;
+  return (
+    <div class="h-full overflow-y-auto py-1" data-testid="debug-variables">
+      <Watches />
+      {s.state !== 'stopped' && <p class="m-0 px-3 text-muted">Variables show when the program pauses.</p>}
+      {s.scopes.map((scope) => (
+        <div key={scope.name}>
+          <div class="px-2 h-6 flex items-center text-muted font-semibold">{scope.name}</div>
+          {scope.variables.map((v, i) => <VariableRow key={`${v.name}:${i}`} variable={v} depth={0} />)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function DebugConsolePanel() {
+  return <DebugConsole />;
+}
+
+export function BreakpointsPanel() {
+  const ws = useWorkspace();
+  const { debug } = ws;
+  const all = Object.entries(debug.breakpoints.value).sort(([a], [b]) => a.localeCompare(b));
+  const filters = debug.state.value.exceptionFilters ?? [];
+  const update = (path: string, line: number, change: Partial<Breakpoint> | null) => {
+    const list = debug.breakpoints.value[path] ?? [];
+    debug.setBreakpoints(path, change ? list.map((b) => (b.line === line ? { ...b, ...change } : b)) : list.filter((b) => b.line !== line));
+  };
+  return (
+    <div class="h-full overflow-y-auto py-1" data-testid="breakpoints-panel">
+      <div class="px-2 h-6 flex items-center text-muted font-semibold">Exceptions</div>
+      {filters.length === 0 && <p class="m-0 px-3 pb-1 text-muted">{debug.active ? "This debugger doesn't offer exception breakpoints." : 'Exception options appear once debugging starts.'}</p>}
+      {filters.map((f) => (
+        <div key={f.id} class="flex items-center gap-2 h-6 px-2 hover:bg-hover" title={f.description}>
+          <Checkbox
+            checked={f.enabled}
+            label={f.label}
+            testId={`exception-${f.id}`}
+            onChange={(on) => void window.saturn.debug.setExceptionFilters(filters.filter((x) => (x.id === f.id ? on : x.enabled)).map((x) => x.id))}
+          />
+        </div>
+      ))}
+      <div class="px-2 h-6 mt-1 flex items-center text-muted font-semibold">Breakpoints</div>
+      {all.length === 0 && <p class="m-0 px-3 text-muted">Click a line number to add a breakpoint.</p>}
+      {all.flatMap(([path, list]) => list.map((b) => (
+        <div key={`${path}:${b.line}`} class="group flex items-center gap-2 h-6 px-2 hover:bg-hover" data-testid="breakpoint-row">
+          <Checkbox checked={b.enabled !== false} label={b.enabled !== false ? 'Turn off' : 'Turn on'} onChange={(on) => update(path, b.line, { enabled: on })} />
+          <button type="button" class="flex-1 min-w-0 flex items-center gap-2 text-left" onClick={() => void ws.documents.open(path, { line: b.line })}>
+            <span class={`truncate ${b.enabled === false ? 'text-muted' : 'text-strong'}`}>{baseName(path)}:{b.line}</span>
+            {(b.condition || b.logMessage) && <span class="text-muted truncate font-mono">{b.logMessage ? `logs ${b.logMessage}` : `when ${b.condition}`}</span>}
+          </button>
+          <IconButton icon={<CloseIcon class="size-3" />} label="Remove breakpoint" class="size-5 hidden group-hover:inline-flex" onClick={() => update(path, b.line, null)} />
+        </div>
+      )))}
+    </div>
+  );
+}
+
+export type DebugTab = 'stack' | 'variables' | 'console' | 'breakpoints' | 'diagnostics';
+
+const DEBUG_TABS: { id: DebugTab; label: string }[] = [
+  { id: 'stack', label: 'Call Stack' },
+  { id: 'variables', label: 'Variables' },
+  { id: 'console', label: 'Console' },
+  { id: 'breakpoints', label: 'Breakpoints' },
+  { id: 'diagnostics', label: 'Diagnostics' },
+];
+
+export function CallStackPanel() {
+  const { debug } = useWorkspace();
+  const s = debug.state.value;
+  const api = window.saturn.debug;
+  const stopped = s.state === 'stopped';
+  return (
+    <div class="h-full overflow-y-auto py-1" data-testid="debug-frames">
+      {!stopped && <p class="m-0 px-3 text-muted">{s.state === 'idle' ? 'Click a line number to add a breakpoint (right-click for a condition or a log message), then start debugging.' : 'The call stack shows when the program pauses.'}</p>}
+      {stopped && s.threads.length > 1 && (
+        <div class="px-2 pb-1" data-testid="debug-threads">
+          <Select value={String(s.threadId ?? '')} options={s.threads.map((t) => ({ value: String(t.id), label: t.name || `Thread ${t.id}` }))} onChange={(id) => void api.selectThread(Number(id))} />
+        </div>
+      )}
+      {s.frames.map((f) => (
+        <TreeRow
+          key={f.id}
+          depth={0}
+          label={f.name}
+          description={f.path ? `${baseName(f.path)}:${f.line}` : undefined}
+          selected={f.id === s.frameId}
+          onClick={() => void api.selectFrame(f.id)}
+        />
+      ))}
+    </div>
+  );
+}
+
+export function DebugPanel({ controlsOnly = false }: { controlsOnly?: boolean }) {
   const ws = useWorkspace();
   const { debug } = ws;
   const s = debug.state.value;
@@ -108,42 +206,20 @@ export function DebugPanel() {
         <span class="ml-2 text-strong truncate">{s.name}</span>
         <span class="text-muted truncate" data-testid="debug-status">{status}</span>
       </div>
-      <div class="flex flex-1 min-h-0">
-        <div class="w-56 shrink-0 overflow-y-auto border-r border-divider py-1" data-testid="debug-frames">
-          {!stopped && <p class="m-0 px-3 text-muted">{s.state === 'idle' ? 'Click a line number to add a breakpoint (right-click for a condition or a log message), then start debugging.' : 'The call stack shows when the program pauses.'}</p>}
-          {stopped && s.threads.length > 1 && (
-            <div class="px-2 pb-1" data-testid="debug-threads">
-              <Select value={String(s.threadId ?? '')} options={s.threads.map((t) => ({ value: String(t.id), label: t.name || `Thread ${t.id}` }))} onChange={(id) => void api.selectThread(Number(id))} />
-            </div>
-          )}
-          {s.frames.map((f) => (
-            <TreeRow
-              key={f.id}
-              depth={0}
-              label={f.name}
-              description={f.path ? `${f.path.split(/[\\/]/).pop()}:${f.line}` : undefined}
-              selected={f.id === s.frameId}
-              onClick={() => void api.selectFrame(f.id)}
-            />
-          ))}
-        </div>
-        <div class="w-72 shrink-0 overflow-y-auto border-r border-divider py-1" data-testid="debug-variables">
-          <Watches />
-          {s.scopes.map((scope) => (
-            <div key={scope.name}>
-              <div class="px-2 h-6 flex items-center text-muted font-semibold">{scope.name}</div>
-              {scope.variables.map((v, i) => <VariableRow key={`${v.name}:${i}`} variable={v} depth={0} />)}
-            </div>
-          ))}
-        </div>
-        <div class="flex-1 min-w-0"><DebugConsole /></div>
-      </div>
+      {!controlsOnly && <TabMenu<DebugTab> tabs={DEBUG_TABS} active={debug.tab.value} onSelect={(t) => (debug.tab.value = t)} />}
+      {!controlsOnly && <div class="flex-1 min-h-0">
+        {debug.tab.value === 'stack' && <CallStackPanel />}
+        {debug.tab.value === 'variables' && <VariablesPanel />}
+        {debug.tab.value === 'console' && <DebugConsolePanel />}
+        {debug.tab.value === 'breakpoints' && <BreakpointsPanel />}
+        {debug.tab.value === 'diagnostics' && <DiagnosticsPanel />}
+      </div>}
       {attaching && path && language && (
         <ProcessPicker
           onPick={(pid) => {
             setAttaching(false);
             ws.layout.show('debug');
-            void debug.start(path, language.id, pid).catch((e: Error) => (ws.notice.value = { text: e.message.replace(/^.*Error: /, ''), kind: 'error' }));
+            void debug.start(path, language.id, pid).catch((e: Error) => (ws.notice.value = { text: errorText(e), kind: 'error' }));
           }}
           onClose={() => setAttaching(false)}
         />

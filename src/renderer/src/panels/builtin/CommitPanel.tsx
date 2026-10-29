@@ -3,7 +3,8 @@ import type { GitChange, GitOperation, GitRemote, GitStash } from '@shared/types
 import { Badge, Button, Checkbox, ChevronDownIcon, ChevronRightIcon, ContextMenu, IconButton, SplitIcon, TextArea } from '@renderer/components';
 import { isMac } from '@renderer/commands/keymap';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
-import { errorText, relativeTime, useGitStatus } from './gitState';
+import { relativeTime, useGitStatus } from './gitState';
+import { errorText } from '@renderer/helpers';
 
 /** Saved stashes, with Apply, Pop and Drop. Shelves from branch switches are listed too. */
 function Stashes({ stashes, act }: { stashes: GitStash[]; act: (label: string, run: () => Promise<void>) => void }) {
@@ -119,7 +120,7 @@ export function CommitPanel() {
   if (!status.repo) {
     return (
       <div class="p-3 flex flex-col items-start gap-2">
-        <p class="m-0 text-muted">This project isn't a Git repository.</p>
+        <p class="m-0 text-muted">This {ws.noun} isn't a Git repository.</p>
         <Button testId="git-init" onClick={() => void act('init', () => window.saturn.git.init())}>Create repository</Button>
         {problem && <p class="m-0 text-accent" role="alert">{problem}</p>}
       </div>
@@ -194,8 +195,8 @@ export function CommitPanel() {
           </button>
           {conflicted ? (
             <>
-              {/* Take one side wholesale, or open the file and pick per conflict. */}
               <span class="hidden group-hover:flex gap-2 shrink-0">
+                <button type="button" class="text-muted hover:text-strong" title="Open the three-way merge editor" data-testid={`git-merge-${c.path}`} onClick={() => ws.documents.openMerge(`${ws.projectPath}/${c.path}`)}>Merge…</button>
                 <button type="button" class="text-muted hover:text-strong" title="Keep the current branch's version" onClick={() => void act('resolve', () => window.saturn.git.resolveWith(c.path, 'ours'))}>Ours</button>
                 <button type="button" class="text-muted hover:text-strong" title="Take the incoming version" onClick={() => void act('resolve', () => window.saturn.git.resolveWith(c.path, 'theirs'))}>Theirs</button>
               </span>

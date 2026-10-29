@@ -12,7 +12,14 @@ import { breakpointLines, breakpoints, editBreakpointAt, setBreakpointLines, set
 import { refreshHighlighting } from '@renderer/modules/textmate';
 import type { InfoDoc } from '@renderer/editor/EditorDocuments';
 import { DiffView } from './DiffView';
+import { MergeEditor } from './MergeEditor';
+import { PageView } from '@renderer/notebooks/PageView';
 import { useWorkspace } from './EditorWorkspace';
+import { blameShown, toggleBlame } from '@renderer/editor/blame';
+import { setTestLines } from '@renderer/editor/testGutter';
+import { setCoverageLines } from '@renderer/editor/coverageGutter';
+import { leaves } from '@renderer/panels/builtin/TestsController';
+import { errorText } from '@renderer/helpers';
 
 /** Floating at the editor's top right while the open file has errors or warnings; opens the Notices panel. */
 function NoticeCount() {
@@ -30,9 +37,9 @@ function NoticeCount() {
       onClick={() => ws.layout.show('notices')}
       class="absolute z-10 top-10 right-4 flex items-center gap-1.5 h-6 px-2 bg-raised border border-border shadow-md shadow-black/30 hover:bg-hover"
     >
-      <NoticesIcon class={`size-3.5 ${errors ? 'text-accent' : 'text-muted'}`} />
-      {errors > 0 && <span class="text-accent font-semibold">{errors}</span>}
-      {warnings > 0 && <span class="text-muted">{warnings}</span>}
+      <NoticesIcon class={`size-3.5 ${errors ? 'text-error' : warnings ? 'text-warning' : 'text-muted'}`} />
+      {errors > 0 && <span class="text-error font-semibold">{errors}</span>}
+      {warnings > 0 && <span class="text-warning">{warnings}</span>}
     </button>
   );
 }
@@ -94,6 +101,8 @@ function TabsMenu({ group }: { group: number }) {
 function InfoView({ info }: { info: InfoDoc }) {
   const ws = useWorkspace();
   if (info.reason === 'diff') return <DiffView diff={info.diff} workingPath={info.workingPath} />;
+  if (info.reason === 'merge' && info.mergePath) return <MergeEditor path={info.mergePath} />;
+  if (info.reason === 'page') return <PageView key={info.path} path={info.path} />;
   const megabytes = ((info.bytes ?? 0) / 1024 / 1024).toFixed(1);
   return (
     <div class="h-full flex flex-col items-center justify-center gap-3 bg-editor text-muted" data-testid="file-info">
@@ -128,6 +137,8 @@ function EditorContextMenu({ view, path, at, onClose }: { view: EditorView; path
     ...(language.length ? [{ separator: true } as const] : []),
     item('editor.toggleBreakpoint', 'Toggle Breakpoint'),
     { separator: true },
+    { id: 'git.blame', label: blameShown(view) ? 'Hide Blame' : 'Show Blame', testId: 'editor-menu-blame' },
+    { separator: true },
     { id: 'cut', label: 'Cut' },
     { id: 'copy', label: 'Copy' },
     { id: 'paste', label: 'Paste' },
@@ -150,7 +161,9 @@ function EditorContextMenu({ view, path, at, onClose }: { view: EditorView; path
       onClose={onClose}
       onPick={(id) => {
         view.focus();
-        if (id.startsWith('editor.')) runEditorCommand(id, view);
+        const relative = path.slice(ws.projectPath.length + 1);
+        if (id === 'git.blame') void toggleBlame(view, relative, (hash) => void ws.showCommitDiff(relative, hash)).catch((e) => (ws.notice.value = { text: errorText(e), kind: 'error' }));
+        else if (id.startsWith('editor.')) runEditorCommand(id, view);
         else void clipboard(id).catch(() => undefined);
       }}
     />
@@ -250,7 +263,7 @@ function EditorPane({ group }: { group: number }) {
     // The file may have changed while another editor or a rename edited it.
     syncText(v, documents.docs.value.find((d) => d.path === path)?.text ?? activeDoc.text);
     ws.cursor.value = cursorLabel(v.state);
-    if (focused) v.focus();
+    if (focused && !document.activeElement?.closest('[role="tree"]')) v.focus();
     if (!cached) {
       // Language support (highlighting, completion) loads asynchronously, then slots in.
       void ws.modules.editorExtensions(path).then((extensions) => {
@@ -267,13 +280,39 @@ function EditorPane({ group }: { group: number }) {
     if (v && latest && shownPath.current === latest.path) syncText(v, latest.text);
   }, [activeDoc?.text]);
 
+  const testGroups = ws.tests.groups.value;
+  const testResults = ws.tests.results.value;
+  useEffect(() => {
+    const v = view.current;
+    if (!v || !activeDoc || shownPath.current !== activeDoc.path) return;
+    const lines = ws.tests.testsIn(activeDoc.path).map(({ controllerId, item }) => ({
+      line: item.line!,
+      label: item.label,
+      state: ws.tests.result(controllerId, item.id)?.state,
+      run: () => {
+        ws.layout.show('tests');
+        void ws.tests.run(controllerId, item.children?.length ? leaves(item.children).map((l) => l.id) : [item.id]).catch(() => undefined);
+      },
+    }));
+    v.dispatch({ effects: setTestLines.of(lines) });
+  }, [testGroups, testResults, activeDoc?.path]);
+
+  const coverage = ws.tests.coverage.value;
+  const showCoverage = ws.tests.showCoverage.value;
+  useEffect(() => {
+    const v = view.current;
+    if (!v || !activeDoc || shownPath.current !== activeDoc.path) return;
+    const file = showCoverage ? coverage.get(activeDoc.path) : undefined;
+    v.dispatch({ effects: setCoverageLines.of(file ? { covered: [...file.covered], uncovered: [...file.uncovered] } : null) });
+  }, [coverage, showCoverage, activeDoc?.path]);
+
   // Breakpoints changed elsewhere (another editor showing the same file) show here too.
   const savedBreakpoints = activeDoc ? debug.breakpoints.value[activeDoc.path] : undefined;
   useEffect(() => {
     const v = view.current;
     if (!v || !activeDoc || shownPath.current !== activeDoc.path) return;
     const wanted = savedBreakpoints ?? [];
-    if (breakpointLines(v.state).join() !== wanted.join()) v.dispatch({ effects: setBreakpointLines.of(wanted) });
+    if (JSON.stringify(breakpointLines(v.state)) !== JSON.stringify(wanted)) v.dispatch({ effects: setBreakpointLines.of(wanted) });
   }, [savedBreakpoints, activeDoc?.path]);
 
   // The paused program's line, while it's in this file.
@@ -339,7 +378,7 @@ function EditorPane({ group }: { group: number }) {
       }}
     >
       {dropTarget && <div class="absolute inset-0 z-20 pointer-events-none bg-accent/10 outline outline-1 outline-accent" />}
-      {tabs.length > 0 && (
+      {tabs.length > 0 && !ws.isNotebook && (
         <TabMenu
           tabs={tabs}
           active={activePath}
@@ -397,7 +436,7 @@ function EditorPane({ group }: { group: number }) {
         )}
         {activeInfo && (infoProvider ? (
           // No text to edit, so preview only; the provider reads the file from its path.
-          <div class="flex-1 min-w-0"><PreviewPane provider={infoProvider} text="" path={activeInfo.path} projectPath={ws.projectPath} /></div>
+          <div class="flex-1 min-w-0"><PreviewPane provider={infoProvider} text="" path={activeInfo.path} projectPath={ws.projectPath} refresh={documents.diskVersion.value} /></div>
         ) : <div class="flex-1 min-w-0"><InfoView info={activeInfo} /></div>)}
         {!activeDoc && !activeInfo && (
           <div class="flex-1 flex items-center justify-center text-muted">Open a file from the Project panel.</div>

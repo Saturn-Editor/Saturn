@@ -18,6 +18,7 @@ export class DebugController {
   readonly watches = signal<string[]>([]);
   /** The launch configuration Start Debugging uses: a configuration id, or null for the default. */
   readonly configuration = signal<string | null>(null);
+  readonly tab = signal<'stack' | 'variables' | 'console' | 'breakpoints' | 'diagnostics'>('stack');
   /** The selected frame of the paused program (where the editor highlights), or null. */
   readonly frame = computed<DebugFrame | null>(() => {
     const s = this.state.value;

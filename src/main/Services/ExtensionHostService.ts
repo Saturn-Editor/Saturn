@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { utilityProcess, type UtilityProcess } from 'electron';
-import type { EditorEvent, EditorFile, MessageKind, ModuleMessage, NotificationAction, SettingValues, TreeItem } from '@shared/modules';
+import { RUN_PROVIDER, TESTS_PROVIDER, versionsProvider, type LanguageVersion, type LanguageVersionChoices, type TestDebugLaunch, type TestEvent, type TestGroup, type EditorEvent, type EditorFile, type LanguageManifest, type MessageKind, type ModuleMessage, type NotificationAction, type SettingValues, type TreeItem } from '@shared/modules';
 import { Rpc } from '@shared/rpc';
 import type { InstalledModule } from './CodeModuleService';
 
@@ -16,6 +16,8 @@ export interface HostEvents {
   webviewPost(panelId: string, projectPath: string | null, message: unknown): void;
   /** A module asked for its webview panel's HTML to be loaded again. */
   webviewRefresh(panelId: string): void;
+  testEvent(projectPath: string, event: TestEvent): void;
+  languageVersion(projectPath: string, languageId: string): Promise<LanguageVersion | null>;
 }
 
 type Ctx = { projectPath: string };
@@ -60,6 +62,8 @@ export class ExtensionHostService {
     rpc.handle('createProgress', (createId: string, message: string) => this.createProgress.get(createId)?.(message));
     rpc.handle('webviewPost', (panelId: string, projectPath: string | null, message: unknown) => this.events.webviewPost(panelId, projectPath, message));
     rpc.handle('webviewRefresh', (panelId: string) => this.events.webviewRefresh(panelId));
+    rpc.handle('testEvent', (projectPath: string, event: TestEvent) => this.events.testEvent(projectPath, event));
+    rpc.handle('languageVersion', (projectPath: string, languageId: string) => this.events.languageVersion(projectPath, languageId));
     child.on('message', (message) => rpc.receive(message));
     child.on('exit', (code) => {
       rpc.rejectAll('The extension host stopped');
@@ -71,7 +75,16 @@ export class ExtensionHostService {
     });
     this.child = child;
     this.rpc = rpc;
-    const loadable = modules.map((m) => ({ id: m.manifest.id, dir: m.dir, main: m.manifest.main, settings: m.settings, storageDir: m.storageDir }));
+    const loadable = modules.map((m) => {
+      const c = m.manifest.contributes as LanguageManifest['contributes'];
+      const provides = [
+        ...(c?.commands ?? []), ...(c?.panels ?? []), ...(c?.previews ?? []), ...(c?.fileTemplates ?? []),
+      ].map((x) => x.id);
+      if (c?.runConfigurations) provides.push(RUN_PROVIDER);
+      if (c?.tests) provides.push(TESTS_PROVIDER);
+      for (const language of c?.languages ?? []) if (language.versions) provides.push(versionsProvider(language.id));
+      return { id: m.manifest.id, dir: m.dir, main: m.manifest.main, settings: m.settings, storageDir: m.storageDir, events: m.manifest.activationEvents, provides };
+    });
     // Open files are known before modules activate, so `saturn.editor` answers from the start.
     for (const [projectPath, state] of this.editors) {
       for (const file of state.files.values()) rpc.notify('editorEvent', projectPath, { type: 'file', file });
@@ -148,6 +161,34 @@ export class ExtensionHostService {
 
   runCommand(id: string, ctx: Ctx): Promise<void> {
     return this.call('runCommand', id, ctx);
+  }
+
+  testsDiscover(ctx: Ctx): Promise<TestGroup[]> {
+    return this.call('testsDiscover', ctx);
+  }
+
+  testsRun(controllerId: string, ids: string[] | null, runId: string, ctx: Ctx, coverage = false): Promise<void> {
+    return this.call('testsRun', controllerId, ids, runId, ctx, coverage);
+  }
+
+  languageVersions(languageId: string, ctx: Ctx): Promise<LanguageVersionChoices> {
+    return this.call('versionsList', languageId, ctx);
+  }
+
+  languageVersionAdd(languageId: string, folder: string, ctx: Ctx): Promise<LanguageVersion> {
+    return this.call('versionsAdd', languageId, folder, ctx);
+  }
+
+  languageVersionChanged(languageId: string, version: LanguageVersion, ctx: Ctx): Promise<void> {
+    return this.call('versionsChanged', languageId, version, ctx);
+  }
+
+  testsCancel(runId: string): Promise<void> {
+    return this.call('testsCancel', runId);
+  }
+
+  testsDebug(controllerId: string, ids: string[] | null, ctx: Ctx): Promise<TestDebugLaunch> {
+    return this.call('testsDebug', controllerId, ids, ctx);
   }
 
   treeChildren(panelId: string, parentId: string | null, ctx: Ctx): Promise<TreeItem[]> {

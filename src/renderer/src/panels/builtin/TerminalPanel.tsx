@@ -20,12 +20,18 @@ function TerminalView({ controller, id }: { controller: TerminalController; id: 
   const host = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const term = new Terminal({ fontFamily: 'JetBrains Mono, Menlo, Consolas, monospace', fontSize: 12, theme: xtermTheme(), cursorBlink: true });
+    const fontFamily = getComputedStyle(document.documentElement).getPropertyValue('--saturn-font-editor').trim() || 'JetBrains Mono, Menlo, Consolas, monospace';
+    const term = new Terminal({ fontFamily, fontSize: 12, theme: xtermTheme(), cursorBlink: true });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host.current!);
     const detach = controller.attach(id, (data) => term.write(data));
     const input = term.onData((data) => controller.write(id, data));
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.key !== 'Enter' || !e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return true;
+      if (e.type === 'keydown') controller.write(id, '\x1b\r');
+      return false;
+    });
     const refit = () => {
       fit.fit();
       controller.resize(id, term.cols, term.rows);

@@ -7,8 +7,10 @@ import { AboutPage } from './AboutPage';
 import { MarketplaceScreen } from './MarketplaceScreen';
 import { SettingsScreen } from './SettingsScreen';
 import {HelpPage} from "@renderer/screens/HelpPage";
+import { errorText } from '@renderer/helpers';
+import { NotebooksPage } from '@renderer/notebooks/NotebooksPage';
 
-type Page = 'projects' | 'marketplace' | 'settings' | 'help' | 'about';
+type Page = 'projects' | 'notebooks' | 'marketplace' | 'settings' | 'help' | 'about';
 /** Every page shows inside the Welcome window; Settings and Marketplace are the same screens as their own windows. */
 type LocalPage = Page;
 
@@ -45,7 +47,7 @@ function ProjectRow({ project, badges, languages, onOpen, onRemove, onDelete, on
   };
   const del = () => {
     setConfirming(null);
-    void onDelete().catch((e) => setProblem(String((e as Error).message).replace(/^.*Error: /, '')));
+    void onDelete().catch((e) => setProblem(errorText(e)));
   };
   return (
     <div class="hover:bg-hover">
@@ -122,7 +124,7 @@ export function CloneForm({ onCancel, onCloned }: { onCancel: () => void; onClon
       await window.saturn.projects.clone(url, parentDir);
       onCloned?.();
     } catch (e) {
-      setProblem(String((e as Error).message).replace(/^.*Error: /, ''));
+      setProblem(errorText(e));
       setBusy(false);
     }
   };
@@ -183,6 +185,7 @@ export function WelcomeScreen() {
         header={<div class="px-3.5 pt-3.5 pb-4"><Logo class="h-8" /></div>}
         items={[
           { id: 'projects', label: 'Projects' },
+          { id: 'notebooks', label: 'Notebooks' },
           { id: 'marketplace', label: 'Marketplace' },
           { id: 'settings', label: 'Settings' },
         ]}
@@ -195,6 +198,7 @@ export function WelcomeScreen() {
       />
       {page === 'settings' && <div class="flex-1 min-w-0" data-testid="welcome-settings"><SettingsScreen embedded /></div>}
       {page === 'marketplace' && <div class="flex-1 min-w-0" data-testid="welcome-marketplace"><MarketplaceScreen embedded /></div>}
+      {page === 'notebooks' && <NotebooksPage />}
       {page === 'help' && <HelpPage />}
       {page === 'about' && <AboutPage />}
       {page === 'projects' && (

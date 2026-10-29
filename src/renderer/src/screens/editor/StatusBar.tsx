@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { FILE_ENCODINGS, type FileEncoding } from '@shared/types';
+import type { LanguageVersion as LanguageVersionType, LanguageVersionChoices } from '@shared/modules';
 import { ContextMenu, type MenuEntry } from '@renderer/components';
 import { diagnosticCounts, onDiagnosticCounts } from '@renderer/modules/languageServer';
-import { languageCandidates, PLAIN_TEXT_LANGUAGE } from '@renderer/modules/ModuleBridge';
+import { errorText } from '@renderer/helpers';
 import { useWorkspace } from './EditorWorkspace';
 
 export function StatusBar() {
@@ -11,7 +12,6 @@ export function StatusBar() {
   const relative = doc ? doc.path.slice(ws.projectPath.length).replace(/^[\\/]/, '') : '';
   const crumbs = [ws.projectName, ...relative.split(/[\\/]/).filter(Boolean)].join(' › ');
   ws.modules.snapshot.value; // re-render when languages change
-  const language = doc ? (ws.modules.languageFor(doc.path)?.name ?? 'Plain Text') : null;
   const notice = ws.notice.value;
   // Settings → Editor → Behaviour → Encoding, kept current.
   const [encoding, setEncoding] = useState<FileEncoding>('utf-8');
@@ -48,7 +48,7 @@ export function StatusBar() {
       )}
       {doc && (
         <span class="whitespace-nowrap flex items-center gap-1" data-testid="status-file">
-          <LanguageMenu path={doc.path} label={language ?? 'Plain Text'} />
+          <LanguageVersion path={doc.path} />
           · {encodingLabel} · {doc.eol} · {ws.cursor.value}
         </span>
       )}
@@ -56,45 +56,54 @@ export function StatusBar() {
   );
 }
 
-/**
- * The file's language in the status bar; clicking it picks another for this file, and (when several
- * installed languages claim its extension) which one opens every file with that extension.
- */
-function LanguageMenu({ path, label }: { path: string; label: string }) {
+const ADD = '\0add';
+
+function LanguageVersion({ path }: { path: string }) {
   const ws = useWorkspace();
-  const [open, setOpen] = useState(false);
+  const language = ws.modules.languageFor(path);
+  const [versions, setVersions] = useState<Record<string, LanguageVersionType>>({});
+  const [choices, setChoices] = useState<LanguageVersionChoices | null>(null);
   const anchor = useRef<HTMLSpanElement>(null);
-  const snapshot = ws.modules.snapshot.value;
-  const candidates = languageCandidates(snapshot, path);
-  const extension = candidates[0]?.extension;
-  const picked = ws.modules.fileLanguages.value[path];
-  const items: MenuEntry[] = [
-    { group: 'This file' },
-    { id: `file:${PLAIN_TEXT_LANGUAGE}`, label: 'Plain Text', testId: 'language-plain' },
-    ...snapshot.languages.map((l) => ({ id: `file:${l.id}`, label: l.name, testId: `language-${l.id}` })),
-    ...(picked ? [{ id: 'file:auto', label: 'By file extension', hint: 'Undo the choice above' }] : []),
-    ...(candidates.length > 1 && extension ? [
-      { separator: true } as const,
-      { group: `All ${extension} files` } as const,
-      ...candidates.map((c) => ({
-        id: `ext:${c.language.id}`,
-        label: c.language.name,
-        hint: ws.modules.extensionLanguages.value[extension] === c.language.id ? 'current' : undefined,
-        testId: `language-ext-${c.language.id}`,
-      })),
-    ] : []),
-  ];
+  useEffect(() => {
+    void window.saturn.languages.versions().then(setVersions);
+    return window.saturn.languages.onVersionsChanged(setVersions);
+  }, []);
+
+  if (!language) return <span data-testid="status-language">Plain Text</span>;
+  const current = versions[language.id];
+  const label = current ? `${language.name} ${current.label}` : language.name;
+  if (!language.versions) return <span data-testid="status-language">{label}</span>;
+
+  const items: MenuEntry[] = choices ? [
+    { group: `${language.name} version` },
+    ...choices.items.map((v) => ({ id: v.id, label: v.label, hint: v.detail, testId: `language-version-${v.id}` })),
+    ...(choices.items.length === 0 ? [{ group: 'None found' } as const] : []),
+    ...(choices.addLabel ? [{ separator: true } as const, { id: ADD, label: choices.addLabel, testId: 'language-version-add' }] : []),
+  ] : [];
   const pick = (id: string) => {
-    const [scope, languageId] = id.split(':');
-    if (scope === 'file') void window.saturn.languages.setFileLanguage(path, languageId === 'auto' ? null : languageId);
-    else if (extension) void window.saturn.settings.update({ extensionLanguages: { ...ws.modules.extensionLanguages.value, [extension]: languageId } });
+    if (!choices) return;
+    const report = (e: unknown) => (ws.notice.value = { text: errorText(e), kind: 'error' });
+    if (id === ADD) void window.saturn.languages.addVersion(language.id, choices.addLabel ?? 'Add').catch(report);
+    else {
+      const version = choices.items.find((v) => v.id === id);
+      if (version) void window.saturn.languages.setVersion(language.id, version).catch(report);
+    }
   };
   return (
     <span ref={anchor} class="relative">
-      <button type="button" class="hover:text-strong" title="Change the file's language" data-testid="status-language" onClick={() => setOpen(!open)}>
-        {label}{candidates.length > 1 && !picked ? ' ▾' : ''}
+      <button
+        type="button"
+        class="hover:text-strong"
+        title={`Choose the ${language.name} version for this project`}
+        data-testid="status-language"
+        onClick={() => {
+          if (choices) return setChoices(null);
+          void window.saturn.languages.versionChoices(language.id).then(setChoices, (e) => (ws.notice.value = { text: errorText(e), kind: 'error' }));
+        }}
+      >
+        {label}
       </button>
-      {open && <ContextMenu class="bottom-6 right-0 w-60 max-h-80 overflow-y-auto" anchor={anchor} items={items} onPick={pick} onClose={() => setOpen(false)} />}
+      {choices && <ContextMenu class="bottom-6 right-0 w-72 max-h-80 overflow-y-auto" anchor={anchor} items={items} onPick={pick} onClose={() => setChoices(null)} />}
     </span>
   );
 }

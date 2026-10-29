@@ -5,6 +5,7 @@ import type { Breakpoint, DebugFrame, DebugScope, DebugState, DebugVariable, Deb
 import type { BreakpointStore } from '../Store/BreakpointStore';
 import type { InstalledLanguage } from './CodeModuleService';
 import { fillSettings, spawnModuleProcess } from './LanguageServerService';
+import { createSampler } from '../Helpers/processSampler';
 
 const STOP_TIMEOUT_MS = 2000;
 const MAX_FRAMES = 50;
@@ -96,7 +97,11 @@ interface Session {
   threadId?: number;
   /** True once the adapter accepted breakpoints (after its "initialized" event). */
   configured: boolean;
+  sampler?: ReturnType<typeof setInterval>;
 }
+
+const SAMPLE_MS = 1000;
+const METRIC_SAMPLES = 300;
 
 export interface DebugEvents {
   changed(projectPath: string, state: DebugState): void;
@@ -149,6 +154,7 @@ export class DebugService {
   private readonly sessions = new Map<string, Session>();
   private modules: InstalledLanguage[] = [];
   private readonly watchLists = new Map<string, string[]>();
+  private readonly exceptionChoices = new Map<string, string[]>();
 
   constructor(private readonly breakpoints: BreakpointStore, private readonly events: DebugEvents) {}
 
@@ -201,7 +207,7 @@ export class DebugService {
    * with the default launch arguments or a named configuration, or (with `processId`) attaching to a
    * running process.
    */
-  async start(projectPath: string, req: { path: string; languageId: string; configuration?: string; processId?: number }): Promise<void> {
+  async start(projectPath: string, req: { path: string; languageId: string; configuration?: string; processId?: number; launch?: Record<string, unknown>; name?: string }): Promise<void> {
     await this.stop(projectPath);
     const owner = this.modules.find((m) => m.manifest.contributes?.debugger?.languages.includes(req.languageId));
     const config = owner?.manifest.contributes?.debugger;
@@ -209,7 +215,7 @@ export class DebugService {
     if (req.processId !== undefined && !config.attach) throw new Error(`${config.label} can't attach to a running process`);
     const chosen = req.configuration ? config.configurations?.find((c) => c.id === req.configuration) : undefined;
     if (req.configuration && !chosen) throw new Error(`There's no ${req.configuration} configuration`);
-    const title = req.processId !== undefined ? `process ${req.processId}` : chosen ? chosen.label : basename(req.path);
+    const title = req.name ?? (req.processId !== undefined ? `process ${req.processId}` : chosen ? chosen.label : basename(req.path));
 
     const { child, command } = spawnModuleProcess(owner, config, projectPath);
     const session: Session = {
@@ -229,16 +235,20 @@ export class DebugService {
     child.on('exit', () => this.end(projectPath, session));
 
     try {
-      await session.connection.request('initialize', {
+      const capabilities = await session.connection.request<{ exceptionBreakpointFilters?: { filter: string; label: string; description?: string; default?: boolean }[] }>('initialize', {
         clientID: 'saturn', clientName: 'Saturn', adapterID: owner.manifest.id, locale: 'en',
         linesStartAt1: true, columnsStartAt1: true, pathFormat: 'path',
         supportsVariableType: true, supportsRunInTerminalRequest: true,
       });
-      session.state = { ...session.state, state: 'running' };
+      const picked = this.exceptionChoices.get(projectPath);
+      const exceptionFilters = (capabilities?.exceptionBreakpointFilters ?? []).map((f) => ({
+        id: f.filter, label: f.label, description: f.description, enabled: picked ? picked.includes(f.filter) : !!f.default,
+      }));
+      session.state = { ...session.state, state: 'running', exceptionFilters };
       this.publish(projectPath, session);
       const vars = { file: req.path, project: projectPath, processId: String(req.processId ?? '') };
       if (req.processId !== undefined) await session.connection.request('attach', fillLaunch(config.attach, vars, owner));
-      else await session.connection.request('launch', fillLaunch(chosen?.launch ?? config.launch, vars, owner));
+      else await session.connection.request('launch', fillLaunch(req.launch ?? chosen?.launch ?? config.launch, vars, owner));
     } catch (e) {
       this.end(projectPath, session, `Couldn't start debugging: ${(e as Error).message}`);
     }
@@ -310,6 +320,7 @@ export class DebugService {
         for (const [path, lines] of Object.entries(await this.breakpoints.forProject(projectPath))) {
           await this.sendBreakpoints(session, path, lines).catch(() => undefined);
         }
+        if (session.state.exceptionFilters?.length) await this.sendExceptionFilters(session).catch(() => undefined);
         session.configured = true;
         await session.connection.request('configurationDone').catch(() => undefined);
         break;
@@ -324,6 +335,9 @@ export class DebugService {
         session.state = { ...session.state, state: 'running', reason: undefined, frames: [], scopes: [], frameId: undefined, threads: [] };
         this.publish(projectPath, session);
         break;
+      case 'process':
+        if (typeof body.systemProcessId === 'number') this.startSampling(projectPath, session, body.systemProcessId);
+        break;
       case 'output':
         if (body.category !== 'telemetry' && body.output) this.events.output(projectPath, body.output, body.category ?? 'console');
         break;
@@ -336,11 +350,25 @@ export class DebugService {
   }
 
   private sendBreakpoints(session: Session, path: string, list: Breakpoint[]): Promise<unknown> {
+    const on = list.filter((b) => b.enabled !== false);
     return session.connection.request('setBreakpoints', {
       source: { path, name: basename(path) },
-      breakpoints: list.map((b) => ({ line: b.line, ...(b.condition && { condition: b.condition }), ...(b.logMessage && { logMessage: b.logMessage }) })),
-      lines: list.map((b) => b.line),
+      breakpoints: on.map((b) => ({ line: b.line, ...(b.condition && { condition: b.condition }), ...(b.logMessage && { logMessage: b.logMessage }) })),
+      lines: on.map((b) => b.line),
     });
+  }
+
+  private sendExceptionFilters(session: Session): Promise<unknown> {
+    return session.connection.request('setExceptionBreakpoints', { filters: (session.state.exceptionFilters ?? []).filter((f) => f.enabled).map((f) => f.id) });
+  }
+
+  async setExceptionFilters(projectPath: string, ids: string[]): Promise<void> {
+    this.exceptionChoices.set(projectPath, ids);
+    const session = this.sessions.get(projectPath);
+    if (!session?.state.exceptionFilters) return;
+    session.state = { ...session.state, exceptionFilters: session.state.exceptionFilters.map((f) => ({ ...f, enabled: ids.includes(f.id) })) };
+    this.publish(projectPath, session);
+    if (session.configured) await this.sendExceptionFilters(session).catch(() => undefined);
   }
 
   /** The paused program's threads, the selected thread's stack (top frame selected), its variables and the watches. */
@@ -392,9 +420,25 @@ export class DebugService {
     return body.variables.map((v) => ({ name: v.name, value: v.value, type: v.type, ref: v.variablesReference }));
   }
 
+  private startSampling(projectPath: string, session: Session, pid: number): void {
+    clearInterval(session.sampler);
+    const sample = createSampler(pid);
+    const started = Date.now();
+    session.state = { ...session.state, metrics: { pid, samples: [] } };
+    session.sampler = setInterval(() => {
+      void sample().then((s) => {
+        if (!s || this.sessions.get(projectPath) !== session || !session.state.metrics) return;
+        const samples = [...session.state.metrics.samples, { seconds: Math.round((Date.now() - started) / 1000), ...s }].slice(-METRIC_SAMPLES);
+        session.state = { ...session.state, metrics: { pid, samples } };
+        this.publish(projectPath, session);
+      });
+    }, SAMPLE_MS);
+  }
+
   private end(projectPath: string, session: Session, problem?: string): void {
     if (this.sessions.get(projectPath) !== session) return;
     this.sessions.delete(projectPath);
+    clearInterval(session.sampler);
     session.child.kill();
     if (problem) this.events.message(projectPath, problem, 'error');
     this.events.changed(projectPath, IDLE);
