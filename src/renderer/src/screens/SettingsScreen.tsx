@@ -5,7 +5,7 @@ import {
 } from '@shared/keymaps';
 import { MARKETPLACE_INDEX_URL } from '@shared/marketplace';
 import { isMac } from '@renderer/commands/keymap';
-import { featureKey, LANGUAGE_FEATURES, type ContributionSnapshot, type SettingValue, type SettingValues, type ViewMode } from '@shared/modules';
+import { featureKey, LANGUAGE_FEATURES, type ContributionSnapshot, type LanguageFeature, type SettingValue, type SettingValues, type ViewMode } from '@shared/modules';
 import { FILE_ENCODINGS, TEXT_SIZES, type AppSettings, type BranchSwitchMode, type FileEncoding, type ThemeSummary, type UpdateStatus } from '@shared/types';
 import { Button, FieldInput, ModuleIcon, FormField, Heading, RadioList, SegmentedControl, Select, SidebarMenu, TabMenu, TextInput, Toggle } from '@renderer/components';
 import { ModeToggle } from '@renderer/theme/ModeToggle';
@@ -84,29 +84,69 @@ function EditorSection() {
 }
 
 /** Code completion from the language's server. */
+const SMARTCODE: { feature: LanguageFeature; title: string; description: string; global?: 'completion' | 'diagnostics' }[] = [
+  { feature: 'completion', title: 'Code completion', description: 'Suggest completions from the language while typing', global: 'completion' },
+  { feature: 'diagnostics', title: 'Error detection', description: 'Underline errors and warnings from the language, and count them in the status bar', global: 'diagnostics' },
+  { feature: 'inlayHints', title: 'Inlay hints', description: 'Show parameter names and inferred types inline' },
+  { feature: 'codeLens', title: 'CodeLens', description: 'Show usage counts and actions above declarations' },
+  { feature: 'semanticTokens', title: 'Semantic highlighting', description: "Colour names by what they are (classes, parameters, properties) using the language's understanding of the code" },
+];
+
 function SmartCodeSection() {
   const settings = useAppSettings();
+  const [tabs, setTabs] = useState<ModuleTab[]>([]);
+  const [values, setValues] = useState<Record<string, SettingValues>>({});
+  useEffect(() => {
+    const load = (s: ContributionSnapshot) => {
+      const languages = s.settings.filter((t) => t.kind === 'language' && t.features.length > 0);
+      setTabs(languages);
+      void Promise.all(languages.map(async (t) => [t.moduleId, await window.saturn.modules.settings(t.moduleId)] as const))
+        .then((all) => setValues(Object.fromEntries(all)));
+    };
+    void window.saturn.modules.snapshot().then(load);
+    const offChanged = window.saturn.modules.onChanged(load);
+    const offSettings = window.saturn.modules.onSettingsChanged((moduleId, next) => setValues((prev) => ({ ...prev, [moduleId]: next })));
+    return () => {
+      offChanged();
+      offSettings();
+    };
+  }, []);
   if (!settings) return null;
+
+  const setAll = async (row: (typeof SMARTCODE)[number], on: boolean) => {
+    if (row.global) await window.saturn.settings.update({ [row.global]: true });
+    await Promise.all(tabs.filter((t) => t.features.includes(row.feature)).map((t) => window.saturn.modules.setSetting(t.moduleId, featureKey(row.feature), on)));
+  };
+
   return (
     <section>
-      <Heading>Code completion</Heading>
-      <div class="flex items-center gap-3">
-        <span class="flex-1">Suggest completions from the language while typing</span>
-        <Toggle
-          on={settings.completion}
-          label={settings.completion ? 'Turn off code completion' : 'Turn on code completion'}
-          onChange={(on) => void window.saturn.settings.update({ completion: on })}
-        />
-      </div>
-      <Heading class="mt-5">Error detection</Heading>
-      <div class="flex items-center gap-3">
-        <span class="flex-1">Underline errors and warnings from the language, and count them in the status bar</span>
-        <Toggle
-          on={settings.diagnostics}
-          label={settings.diagnostics ? 'Turn off error detection' : 'Turn on error detection'}
-          onChange={(on) => void window.saturn.settings.update({ diagnostics: on })}
-        />
-      </div>
+      {SMARTCODE.map((row, i) => {
+        const supporting = tabs.filter((t) => t.features.includes(row.feature));
+        const onCount = row.global && !settings[row.global] ? 0 : supporting.filter((t) => values[t.moduleId]?.[featureKey(row.feature)] !== false).length;
+        const on = supporting.length > 0 && onCount === supporting.length;
+        const partial = onCount > 0 && onCount < supporting.length;
+        const state = partial ? `Partly on (${onCount} of ${supporting.length} languages)` : null;
+        return (
+          <div key={row.feature} data-testid={`smartcode-${row.feature}`}>
+            <Heading class={i ? 'mt-5' : ''}>{row.title}</Heading>
+            <div class="flex items-center gap-3">
+              <span class="flex-1">
+                {row.description}
+                {state && <span class="block text-muted">{state}</span>}
+                {supporting.length === 0 && <span class="block text-muted">No installed language supports this</span>}
+              </span>
+              {supporting.length > 0 && (
+                <Toggle
+                  on={on}
+                  partial={partial}
+                  label={on ? `Turn off ${row.title.toLowerCase()} for every language` : `Turn on ${row.title.toLowerCase()} for every language`}
+                  onChange={(next) => void setAll(row, next)}
+                />
+              )}
+            </div>
+          </div>
+        );
+      })}
     </section>
   );
 }
@@ -240,7 +280,7 @@ function AdvancedSection() {
       <p class="mt-0 mb-2 text-muted">Where New Project and Clone suggest putting new projects.</p>
       <div class="flex items-center gap-2 mb-5">
         <div class="flex-1 min-w-0 h-7 px-2 flex items-center bg-editor border border-border truncate" title={settings.projectsFolder ?? undefined} data-testid="projects-folder">
-          {settings.projectsFolder ?? 'SaturnProjects in your home folder, or your home folder'}
+          {settings.projectsFolder ?? 'SaturnProjects in your home folder'}
         </div>
         <Button testId="projects-folder-choose" onClick={() => void window.saturn.projects.pickFolder().then((path) => {
           if (path) void window.saturn.settings.update({ projectsFolder: path });

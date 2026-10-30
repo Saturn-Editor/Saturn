@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { Badge, Menu, TextInput } from '@renderer/components';
+import { Badge, FileIcon, Menu, TextInput } from '@renderer/components';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
+import { fuzzyScore } from './fuzzy';
 import { shortcutFor } from './keymap';
+
+const PAGE_PREFIX = 'page:';
 
 /** The search box in the top bar: finds and runs any registered command. */
 export function ActionSearch() {
@@ -24,7 +27,15 @@ export function ActionSearch() {
   }), []);
   const searchShortcut = shortcutFor('core.searchActions');
 
-  const results = ws.commands.search(query, 12);
+  const pages = ws.isNotebook && query.trim()
+    ? Object.entries(ws.pageTitles.value)
+      .map(([path, title]) => ({ path, title, score: fuzzyScore(query, title) }))
+      .filter((p): p is { path: string; title: string; score: number } => p.score !== null)
+      .sort((a, b) => b.score - a.score || a.title.localeCompare(b.title))
+      .slice(0, 8)
+    : [];
+  const actions = ws.commands.search(query, 12);
+  const results = [...pages.map((p) => ({ id: `${PAGE_PREFIX}${p.path}` })), ...actions];
 
   const close = () => {
     setOpen(false);
@@ -35,7 +46,8 @@ export function ActionSearch() {
 
   const runCommand = (id: string) => {
     close();
-    void ws.commands.run(id);
+    if (id.startsWith(PAGE_PREFIX)) void ws.documents.open(id.slice(PAGE_PREFIX.length));
+    else void ws.commands.run(id);
   };
 
   const onKeyDown = (e: KeyboardEvent) => {
@@ -70,15 +82,18 @@ export function ActionSearch() {
           selectedIndex={index}
           onHover={setIndex}
           onPick={runCommand}
-          items={results.map((c) => {
-            const shortcut = shortcutFor(c.id);
-            return {
-              id: c.id,
-              label: c.title,
-              icon: c.source.icon ?? <Badge text={c.source.label.slice(0, 2)} />,
-              hint: shortcut ? `${c.source.label} · ${shortcut}` : c.source.label,
-            };
-          })}
+          items={[
+            ...pages.map((p) => ({ id: `${PAGE_PREFIX}${p.path}`, label: p.title, icon: <FileIcon />, hint: 'Page' })),
+            ...actions.map((c) => {
+              const shortcut = shortcutFor(c.id);
+              return {
+                id: c.id,
+                label: c.title,
+                icon: c.source.icon ?? <Badge text={c.source.label.slice(0, 2)} />,
+                hint: shortcut ? `${c.source.label} · ${shortcut}` : c.source.label,
+              };
+            }),
+          ]}
         />
       )}
     </div>

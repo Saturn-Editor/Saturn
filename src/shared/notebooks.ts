@@ -1,8 +1,8 @@
 export const NOTEBOOK_FORMAT = 'saturn-notebook';
-export const PAGE_FORMAT = 'saturn-notebook-page';
 export const NOTEBOOK_VERSION = 1;
 export const NOTEBOOK_FILE = 'notebook.json';
 export const PAGE_EXTENSION = '.snp';
+export const PAGE_LINK = 'saturn-page:';
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 export interface NotebookSummary {
@@ -36,15 +36,39 @@ export function isPageStyle(v: unknown): v is PageStyle {
   return typeof s === 'object' && s !== null && PAGE_FONTS.some((f) => f.id === s.font) && colour(s.background) && colour(s.text);
 }
 
+export interface Sealed {
+  iv: string;
+  tag: string;
+  data: string;
+}
+
+export interface NotebookKdf {
+  kdf: 'argon2id';
+  salt: string;
+  memory: number;
+  passes: number;
+  parallelism: number;
+}
+
+export type NotebookEncryption = NotebookKdf & { key: Sealed };
+
 export interface NotebookMeta {
   format: typeof NOTEBOOK_FORMAT;
   version: number;
   name: string;
+  encryption?: NotebookEncryption;
 }
 
-export interface PageFile {
-  format: typeof PAGE_FORMAT;
+export interface EncryptedPageFile {
   version: number;
+  encrypted: Sealed;
+}
+
+export type NotebookLock = 'none' | 'locked' | 'unlocked';
+
+export interface PageFile {
+  version: number;
+  title?: string;
   font?: PageFont;
   background?: string | null;
   text?: string | null;
@@ -56,11 +80,19 @@ export interface NotebookFolder {
   isDefault: boolean;
 }
 
-export function emptyPage(): PageFile {
-  return { format: PAGE_FORMAT, version: NOTEBOOK_VERSION, doc: { type: 'doc', content: [{ type: 'paragraph' }] } };
+export function emptyPage(title = 'Untitled'): PageFile {
+  return { version: NOTEBOOK_VERSION, title, doc: { type: 'doc', content: [{ type: 'paragraph' }] } };
+}
+
+export function newPageId(): string {
+  return crypto.randomUUID();
+}
+
+export function pageId(path: string): string {
+  return (path.split(/[\\/]/).pop() ?? '').replace(/\.snp$/i, '');
 }
 
 export function isPageFile(v: unknown): v is PageFile {
   const p = v as PageFile;
-  return typeof p === 'object' && p !== null && p.format === PAGE_FORMAT && typeof p.version === 'number' && typeof p.doc === 'object';
+  return typeof p === 'object' && p !== null && typeof p.version === 'number' && typeof p.doc === 'object' && p.doc !== null;
 }

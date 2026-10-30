@@ -43,8 +43,8 @@ export function Menu({ items, selectedIndex, onPick, onHover, class: cls = '', a
             class={`flex items-center gap-2 px-3 py-1.5 cursor-pointer ${index === selectedIndex ? 'bg-selection text-strong' : 'hover:bg-hover'}`}
           >
             {item.icon}
-            <span class="flex-1 truncate">{item.label}</span>
-            {item.hint && <span class="text-muted text-[11px]">{item.hint}</span>}
+            <span class={item.hint ? 'shrink-0 max-w-full truncate' : 'flex-1 truncate'}>{item.label}</span>
+            {item.hint && <span class="flex-1 min-w-0 truncate text-right text-muted text-[11px]" title={item.hint}>{item.hint}</span>}
           </div>
         );
       })}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { baseName, errorText, parentOf } from '@renderer/helpers';
-import { cleanTitle, isPagePath, pageTitle, subpageFolder } from '@renderer/notebooks/pages';
+import { isPagePath, pageForLink, pageId, pageLink, subpageFolder } from '@renderer/notebooks/pages';
 import { leaves } from '@renderer/panels/builtin/TestsController';
 
 describe('helpers', () => {
@@ -17,15 +17,16 @@ describe('helpers', () => {
 
 describe('notebook pages', () => {
   it('names pages and their sub-page folders', () => {
-    expect(isPagePath('/n/Meeting notes.snp')).toBe(true);
+    expect(isPagePath('/n/k3f9x2ab.snp')).toBe(true);
     expect(isPagePath('/n/notes.md')).toBe(false);
-    expect(pageTitle('/n/Meeting notes.snp')).toBe('Meeting notes');
-    expect(subpageFolder('/n/Meeting notes.snp')).toBe('/n/Meeting notes');
+    expect(pageId('/n/k3f9x2ab.snp')).toBe('k3f9x2ab');
+    expect(subpageFolder('/n/k3f9x2ab.snp')).toBe('/n/k3f9x2ab');
   });
 
-  it('makes titles safe file names', () => {
-    expect(cleanTitle('a/b: c?')).toBe('a-b- c-');
-    expect(cleanTitle('   ')).toBe('Untitled');
+  it('links pages by id, wherever they are', () => {
+    expect(pageLink('/n/a/k3f9x2ab.snp')).toBe('saturn-page:k3f9x2ab');
+    expect(pageForLink('saturn-page:k3f9x2ab', { '/n/b/k3f9x2ab.snp': 'Notes' })).toBe('/n/b/k3f9x2ab.snp');
+    expect(pageForLink('saturn-page:gone', { '/n/b/k3f9x2ab.snp': 'Notes' })).toBeUndefined();
   });
 });
 

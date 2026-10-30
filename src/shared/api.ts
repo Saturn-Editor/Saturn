@@ -2,9 +2,9 @@ import type {
   AppFolder, AppInfo, AppSettings, BlameLine, Breakpoint, ConflictVersions, RebaseStep, DebugState, DebugVariable, DirEntry, GitCommit, GitRemote, GitStash, GitStatus, GitTag, WorkingDiff, UpdateStatus, FileReadResult, LayoutState, NewProjectRequest, RecentProject,
   RunEntry, Theme, ThemeMode, ThemeSummary, Unsubscribe, WindowKind,
 } from './types';
-import type { NotebookFolder, NotebookSummary, PageStyle } from './notebooks';
+import type { NotebookFolder, NotebookLock, NotebookSummary, PageFile, PageStyle } from './notebooks';
 import type {
-  AppNotification, CompletionItem, CompletionRequest, ContributionSnapshot, Diagnostic, DocumentRequest, EditorEvent, DocumentSymbol, FileEdits, ModuleMessage,
+  AppNotification, CompletionItem, CompletionRequest, ContributionSnapshot, Diagnostic, DocumentRequest, EditorEvent, DocumentSymbol, FileEdits, ModuleMessage, InputOptions, CodeAction, CodeActionRequest, CodeLensItem, InlayHint, SemanticToken, SymbolRename, DocCommentRequest,
   ModuleSummary, ReferenceLocation, SettingValue, SettingValues, SignatureHelp, SourceLocation, TextEdit, TreeItem,
 } from './modules';
 import type { LanguageVersion, LanguageVersionChoices, TestEvent, TestGroup, TestSet } from './modules';
@@ -72,6 +72,12 @@ export interface SaturnApi {
     format(req: DocumentRequest & { tabSize: number; insertSpaces: boolean }): Promise<TextEdit[]>;
     /** Parameter hints for the call around a position, or null. */
     signatureHelp(req: CompletionRequest): Promise<SignatureHelp | null>;
+    codeActions(req: CodeActionRequest): Promise<CodeAction[]>;
+    inlayHints(req: DocumentRequest & { fromLine: number; toLine: number }): Promise<InlayHint[]>;
+    codeLenses(req: DocumentRequest): Promise<CodeLensItem[]>;
+    runCodeLens(languageId: string, path: string, index: number): Promise<void>;
+    semanticTokens(req: DocumentRequest): Promise<SemanticToken[]>;
+    runCodeAction(languageId: string, index: number): Promise<FileEdits[]>;
     /** Sends an open file's text to its language server (so it can publish diagnostics). */
     syncDocument(req: { path: string; languageId: string; text: string }): Promise<void>;
     closeDocument(req: { path: string; languageId: string }): Promise<void>;
@@ -112,6 +118,12 @@ export interface SaturnApi {
     reportEditor(event: EditorEvent): void;
     /** Messages from modules (and extension host problems) for the status bar. */
     onMessage(cb: (message: ModuleMessage) => void): Unsubscribe;
+    onInputRequest(cb: (id: number, options: InputOptions) => void): Unsubscribe;
+    onRenameFileRequest(cb: (id: number, path: string, newName: string) => void): Unsubscribe;
+    onApplyEditsRequest(cb: (id: number, files: FileEdits[]) => void): Unsubscribe;
+    reply(id: number, value: unknown, error?: string): Promise<void>;
+    symbolRenamed(event: SymbolRename): Promise<void>;
+    docComment(languageId: string, request: DocCommentRequest): Promise<string | null>;
   };
   /** The bell menu next to Settings: notifications from modules and Saturn, newest first. */
   notifications: {
@@ -254,9 +266,9 @@ export interface SaturnApi {
     /** Fetches one kind's list from the GitHub-hosted index; rejects if it can't be reached within 5 seconds. */
     list(kind: MarketplaceKind): Promise<MarketplaceEntry[]>;
     /** Downloads, verifies and installs an entry (the newest version this Saturn supports) from the last fetched list. */
-    installLanguage(id: string): Promise<void>;
-    installExtension(id: string): Promise<void>;
-    installTheme(id: string): Promise<void>;
+    installLanguage(id: string, version?: string): Promise<void>;
+    installExtension(id: string, version?: string): Promise<void>;
+    installTheme(id: string, version?: string): Promise<void>;
   };
   projects: {
     recent(): Promise<RecentProject[]>;
@@ -321,6 +333,18 @@ export interface SaturnApi {
     remove(path: string): Promise<void>;
     delete(path: string): Promise<void>;
     name(): Promise<string | null>;
+    rename(name: string): Promise<string>;
+    lockState(): Promise<NotebookLock>;
+    unlock(password: string, remember: boolean): Promise<void>;
+    lock(): Promise<void>;
+    encrypt(password: string, remember: boolean): Promise<void>;
+    decrypt(password: string): Promise<void>;
+    changePassword(current: string, next: string): Promise<void>;
+    readPage(path: string): Promise<PageFile>;
+    pageTitles(): Promise<Record<string, string>>;
+    createPage(dir: string, title: string): Promise<string>;
+    setPageTitle(path: string, title: string): Promise<void>;
+    writePage(path: string, page: PageFile): Promise<void>;
   };
   fs: {
     readDir(path: string): Promise<DirEntry[]>;

@@ -3,8 +3,10 @@ import type { RunEntry } from '@shared/types';
 import { Button, ChevronDownIcon, ContextMenu, IconButton, PlayIcon, StopIcon, TextInput, type MenuEntry } from '@renderer/components';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
 import { errorText } from '@renderer/helpers';
+import { fuzzyScore } from '@renderer/commands/fuzzy';
 
 const ADD = '__add__';
+const RUN_LIMIT = 10;
 
 function AddCommandForm({ onSave, onCancel }: { onSave: (name: string, command: string) => Promise<void>; onCancel: () => void }) {
   const [name, setName] = useState('');
@@ -36,8 +38,13 @@ export function RunMenu() {
   const ws = useWorkspace();
   const [entries, setEntries] = useState<RunEntry[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const selectRef = useRef<HTMLButtonElement>(null);
+  const [menuOpen, setMenuOpenState] = useState(false);
+  const [query, setQuery] = useState('');
+  const setMenuOpen = (open: boolean) => {
+    setMenuOpenState(open);
+    if (!open) setQuery('');
+  };
+  const selectRef = useRef<HTMLDivElement>(null);
   const [adding, setAdding] = useState(false);
   const [runningTerminal, setRunningTerminal] = useState<string | null>(null);
   ws.terminals.tabs.value; // re-render when a run finishes
@@ -57,12 +64,22 @@ export function RunMenu() {
     ws.showTerminal();
   };
 
-  // One bold heading per group (each language, then "Custom"), in the order main returned them.
+  const activePath = ws.documents.activePath.value;
+  const activeModule = activePath ? ws.modules.languageFor(activePath)?.moduleId : undefined;
+  const q = query.trim();
+  const shown = entries
+    .map((e, order) => ({ e, order, score: q ? Math.max(fuzzyScore(q, e.name) ?? -Infinity, fuzzyScore(q, e.command) ?? -Infinity) : 0 }))
+    .filter((r) => r.score !== -Infinity)
+    .sort((a, b) => Number(b.e.source === activeModule) - Number(a.e.source === activeModule) || (q ? b.score - a.score : 0) || a.order - b.order)
+    .slice(0, RUN_LIMIT)
+    .map((r) => r.e);
+
   const items: MenuEntry[] = [];
-  for (const e of entries) {
+  for (const e of shown) {
     if (!items.some((i) => 'group' in i && i.group === e.group)) items.push({ group: e.group });
     items.push({ id: e.id, label: e.name, hint: e.command });
   }
+  if (!shown.length && q) items.push({ group: 'No matching configurations' });
   items.push({ separator: true }, { id: ADD, label: '＋ Add custom command…', testId: 'run-add' });
 
   const pick = async (id: string) => {
@@ -73,16 +90,36 @@ export function RunMenu() {
 
   return (
     <div class="relative flex items-center gap-1">
-      <button
-        ref={selectRef}
-        type="button"
-        data-testid="run-select"
-        onClick={() => setMenuOpen(!menuOpen)}
-        class="h-7 px-2 flex items-center gap-2 border border-border hover:bg-hover text-strong"
-      >
-        <span class="max-w-48 truncate">{selected?.name ?? 'Add configuration…'}</span>
-        <ChevronDownIcon class="size-3.5 text-muted" />
-      </button>
+      <div ref={selectRef}>
+        <button
+          type="button"
+          data-testid="run-select"
+          onClick={() => setMenuOpen(!menuOpen)}
+          class="h-7 px-2 flex items-center gap-2 border border-border hover:bg-hover text-strong"
+        >
+          <span class="max-w-48 truncate">{selected?.name ?? 'Add configuration…'}</span>
+          <ChevronDownIcon class="size-3.5 text-muted" />
+        </button>
+        {menuOpen && (
+          <div class="absolute z-30 top-8 right-0 w-72 p-1.5 bg-raised border border-border border-b-0">
+            <TextInput
+              class="w-full"
+              value={query}
+              placeholder="Search run configurations"
+              testId="run-search"
+              autoFocus
+              onInput={setQuery}
+              onKeyDown={(e) => {
+                const first = shown[0];
+                if (e.key === 'Enter' && first) {
+                  setMenuOpen(false);
+                  void pick(first.id);
+                }
+              }}
+            />
+          </div>
+        )}
+      </div>
       <IconButton icon={<PlayIcon class="size-3.5 text-accent" />} label="Run" data-testid="run-start" onClick={() => void run()} />
       <IconButton
         icon={<StopIcon class="size-3.5" />}
@@ -91,7 +128,7 @@ export function RunMenu() {
         onClick={() => runningTerminal && ws.terminals.stop(runningTerminal)}
       />
       {menuOpen && (
-        <ContextMenu class="top-8 right-0 w-72" anchor={selectRef} items={items} onPick={(id) => void pick(id)} onClose={() => setMenuOpen(false)} />
+        <ContextMenu class="top-[4.25rem] right-0 w-72" anchor={selectRef} items={items} onPick={(id) => void pick(id)} onClose={() => setMenuOpen(false)} />
       )}
       {adding && (
         <AddCommandForm

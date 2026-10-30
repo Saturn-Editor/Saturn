@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { utilityProcess, type UtilityProcess } from 'electron';
-import { RUN_PROVIDER, TESTS_PROVIDER, versionsProvider, type LanguageVersion, type LanguageVersionChoices, type TestDebugLaunch, type TestEvent, type TestGroup, type EditorEvent, type EditorFile, type LanguageManifest, type MessageKind, type ModuleMessage, type NotificationAction, type SettingValues, type TreeItem } from '@shared/modules';
+import { RUN_PROVIDER, TESTS_PROVIDER, versionsProvider, type DocCommentRequest, type InputOptions, type LanguageVersion, type SymbolRename, type LanguageVersionChoices, type TestDebugLaunch, type TestEvent, type TestGroup, type EditorEvent, type EditorFile, type LanguageManifest, type MessageKind, type ModuleMessage, type NotificationAction, type SettingValues, type TreeItem } from '@shared/modules';
 import { Rpc } from '@shared/rpc';
 import type { InstalledModule } from './CodeModuleService';
 
@@ -18,6 +18,8 @@ export interface HostEvents {
   webviewRefresh(panelId: string): void;
   testEvent(projectPath: string, event: TestEvent): void;
   languageVersion(projectPath: string, languageId: string): Promise<LanguageVersion | null>;
+  showInput(projectPath: string, options: InputOptions): Promise<string | null>;
+  renameFile(projectPath: string, path: string, newName: string): Promise<string>;
 }
 
 type Ctx = { projectPath: string };
@@ -64,6 +66,8 @@ export class ExtensionHostService {
     rpc.handle('webviewRefresh', (panelId: string) => this.events.webviewRefresh(panelId));
     rpc.handle('testEvent', (projectPath: string, event: TestEvent) => this.events.testEvent(projectPath, event));
     rpc.handle('languageVersion', (projectPath: string, languageId: string) => this.events.languageVersion(projectPath, languageId));
+    rpc.handle('showInput', (projectPath: string, options: InputOptions) => this.events.showInput(projectPath, options));
+    rpc.handle('renameFile', (projectPath: string, path: string, newName: string) => this.events.renameFile(projectPath, path, newName));
     child.on('message', (message) => rpc.receive(message));
     child.on('exit', (code) => {
       rpc.rejectAll('The extension host stopped');
@@ -83,7 +87,8 @@ export class ExtensionHostService {
       if (c?.runConfigurations) provides.push(RUN_PROVIDER);
       if (c?.tests) provides.push(TESTS_PROVIDER);
       for (const language of c?.languages ?? []) if (language.versions) provides.push(versionsProvider(language.id));
-      return { id: m.manifest.id, dir: m.dir, main: m.manifest.main, settings: m.settings, storageDir: m.storageDir, events: m.manifest.activationEvents, provides };
+      const languages = (c?.languages ?? []).map((l) => l.id);
+      return { id: m.manifest.id, dir: m.dir, main: m.manifest.main, settings: m.settings, storageDir: m.storageDir, events: m.manifest.activationEvents, provides, languages };
     });
     // Open files are known before modules activate, so `saturn.editor` answers from the start.
     for (const [projectPath, state] of this.editors) {
@@ -212,6 +217,14 @@ export class ExtensionHostService {
     } finally {
       this.createProgress.delete(createId);
     }
+  }
+
+  symbolRenamed(event: SymbolRename, ctx: Ctx): Promise<void> {
+    return this.call('symbolRenamed', event, ctx);
+  }
+
+  docComment(languageId: string, request: DocCommentRequest, ctx: Ctx): Promise<string | null> {
+    return this.call('docComment', languageId, request, ctx);
   }
 
   runEntries(ctx: Ctx): Promise<{ moduleId: string; name: string; command: string }[]> {

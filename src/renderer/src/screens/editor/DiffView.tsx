@@ -91,22 +91,27 @@ function SplitRows({ lines }: { lines: DiffLine[] }) {
     while (i < lines.length && lines[i].kind === 'add') added.push(lines[i++]);
     for (let j = 0; j < Math.max(removed.length, added.length); j++) rows.push([removed[j] ?? null, added[j] ?? null]);
   }
-  const side = (l: DiffLine | null, n?: number) => (
-    <div class={`flex-1 min-w-0 flex ${l ? TONE[l.kind] : 'bg-panel/50'}`}>
-      <LineNumber n={n} />
-      <span class="whitespace-pre overflow-hidden pr-2">{l?.text ?? ''}</span>
+  const column = (pick: (row: [DiffLine | null, DiffLine | null]) => [DiffLine | null, number | undefined]) => (
+    <div class="flex-1 min-w-0 overflow-x-auto">
+      <div class="min-w-max">
+        {rows.map((row, i) => {
+          const [l, n] = pick(row);
+          return (
+            <div key={i} class={`flex ${l ? TONE[l.kind] : 'bg-panel/50'}`}>
+              <LineNumber n={n} />
+              <span class="whitespace-pre pr-2">{l?.text || ' '}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
   return (
-    <>
-      {rows.map(([left, right], i) => (
-        <div key={i} class="flex">
-          {side(left, left?.oldLine)}
-          <div class="w-px shrink-0 bg-divider" />
-          {side(right, right?.newLine)}
-        </div>
-      ))}
-    </>
+    <div class="flex">
+      {column(([left]) => [left, left?.oldLine])}
+      <div class="w-px shrink-0 bg-divider" />
+      {column(([, right]) => [right, right?.newLine])}
+    </div>
   );
 }
 

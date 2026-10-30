@@ -163,7 +163,7 @@ export class EditorDocuments {
   private async load(path: string, opts: { force?: boolean }): Promise<OpenResult> {
     if (path.toLowerCase().endsWith('.snp')) {
       if (this.singlePage) this.infos.value = this.infos.value.filter((i) => i.reason !== 'page');
-      this.openInfo({ path, name: baseName(path).slice(0, -4), reason: 'page' });
+      this.openInfo({ path, name: this.pageName?.(path) ?? baseName(path).slice(0, -4), reason: 'page' });
       return 'opened';
     }
     const result = await this.api.fs.readFile(path, opts);
@@ -223,9 +223,17 @@ export class EditorDocuments {
   moved(from: string, to: string): void {
     const move = (p: string) => (isUnder(p, from) ? to + p.slice(from.length) : p);
     this.docs.value = this.docs.value.map((d) => (isUnder(d.path, from) ? { ...d, path: move(d.path), name: baseName(move(d.path)) } : d));
-    this.infos.value = this.infos.value.map((i) => (isUnder(i.path, from) ? { ...i, path: move(i.path), name: i.reason === 'page' ? baseName(move(i.path)).slice(0, -4) : baseName(move(i.path)) } : i));
+    this.infos.value = this.infos.value.map((i) => (isUnder(i.path, from) ? { ...i, path: move(i.path), name: i.reason === 'page' ? i.name : baseName(move(i.path)) } : i));
     if (this.activePath.value) this.activePath.value = move(this.activePath.value);
     this.groupPaths.value = this.groupPaths.value.map((p) => (p ? move(p) : p));
+  }
+
+  pageName: ((path: string) => string) | null = null;
+
+  renamePages(): void {
+    const name = this.pageName;
+    if (!name) return;
+    this.infos.value = this.infos.value.map((i) => (i.reason === 'page' ? { ...i, name: name(i.path) } : i));
   }
 
   setText(path: string, text: string): void {

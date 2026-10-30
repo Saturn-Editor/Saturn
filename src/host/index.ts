@@ -5,7 +5,7 @@
 import { mkdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
-import { RUN_PROVIDER, TESTS_PROVIDER, versionsProvider, type LanguageVersion, type FileCoverage, type TestDebugLaunch, type TestEvent, type TestGroup, type TestItem, type TestResult, type EditorEvent, type EditorFile, type EditorSelection, type MessageKind, type NotificationAction, type SettingValue, type SettingValues, type TreeItem } from '@shared/modules';
+import { RUN_PROVIDER, TESTS_PROVIDER, versionsProvider, type DocCommentRequest, type InputOptions, type SymbolRename, type LanguageVersion, type FileCoverage, type TestDebugLaunch, type TestEvent, type TestGroup, type TestItem, type TestResult, type EditorEvent, type EditorFile, type EditorSelection, type MessageKind, type NotificationAction, type SettingValue, type SettingValues, type TreeItem } from '@shared/modules';
 import { Rpc } from '@shared/rpc';
 import { findFiles } from '../main/Helpers/findFiles';
 
@@ -66,6 +66,7 @@ export interface SaturnModuleApi {
     openFile(projectPath: string, path: string, line?: number, column?: number): void;
     /** Files changed inside an open project: `dir` is the folder whose contents changed (debounced). */
     onDidChangeFiles(listener: (e: { projectPath: string; dir: string }) => void): void;
+    renameFile(projectPath: string, path: string, newName: string): Promise<string>;
   };
   window: {
     /** Shows a message in the status bar: of that project's window if given, otherwise every window. */
@@ -75,6 +76,7 @@ export interface SaturnModuleApi {
      * commands, open its Settings tab, or open an https link.
      */
     notify(notification: { title: string; message?: string; kind?: MessageKind; actions?: NotificationAction[] }): void;
+    showInput(projectPath: string, options: InputOptions): Promise<string | null>;
   };
   languageServer: {
     /** Restarts this module's language server (and re-checks `requires`), e.g. after installing it. */
@@ -94,6 +96,8 @@ export interface SaturnModuleApi {
       onChange?(ctx: ModuleContext & { version: LanguageVersion }): void | Promise<void>;
     }): void;
     getVersion(projectPath: string, languageId: string): Promise<LanguageVersion | null>;
+    onDidRenameSymbol(listener: (e: ModuleContext & SymbolRename) => void): void;
+    registerDocComment(languageId: string, provide: (request: ModuleContext & DocCommentRequest) => string | null | Promise<string | null>): void;
   };
   terminal: {
     /** Runs a shell command in a new Terminal tab of that project's window (interactive, with Stop), e.g. "dotnet run". */
@@ -174,6 +178,7 @@ interface LoadedModule {
   storageDir: string;
   events?: string[];
   provides: string[];
+  languages?: string[];
 }
 
 type Fn = (...args: any[]) => any;
@@ -197,6 +202,7 @@ class ExtensionHost {
   private readonly activating = new Map<string, Promise<void>>();
   private readonly openProjects = new Set<string>();
   private readonly webviews = new Map<string, { html: Fn; onMessage?: Fn }>();
+  private readonly docComments = new Map<string, Fn>();
   /** Per project: its open files and the focused editor's file and selection, as its window reports them. */
   private readonly editors = new Map<string, { files: Map<string, EditorFile>; activePath: string | null; selection: EditorSelection | null }>();
 
@@ -255,6 +261,14 @@ class ExtensionHost {
       (await this.need(this.trees, id, 'panel')).onAction?.(actionId, item, ctx));
     this.rpc.handle('renderPreview', async (id: string, text: string, ctx: ModuleContext & { path: string }) =>
       (await this.need(this.previews, id, 'preview'))(text, ctx));
+    this.rpc.handle('symbolRenamed', async (event: SymbolRename, ctx: ModuleContext) => {
+      await this.activateWhere((m) => m.events?.includes(`onLanguage:${event.languageId}`) ?? false);
+      this.emit('symbolRenamed', { ...event, ...ctx });
+    });
+    this.rpc.handle('docComment', async (languageId: string, request: DocCommentRequest, ctx: ModuleContext) => {
+      if (!this.docComments.has(languageId)) await this.activateWhere((m) => m.events?.includes(`onLanguage:${languageId}`) ?? false);
+      return (await this.docComments.get(languageId)?.({ ...request, ...ctx })) ?? null;
+    });
     this.rpc.handle('templateFile', async (id: string, ctx: TemplateContext) => {
       await this.activateWhere((m) => m.provides.includes(id));
       const t = this.templates.get(id);
@@ -350,7 +364,7 @@ class ExtensionHost {
     for (const m of modules) {
       this.settings.set(m.id, m.settings);
       if (!m.main) continue;
-      if (m.events && !m.events.includes('*')) {
+      if (m.events && !m.events.includes('*') && (m.languages ?? []).every((id) => m.events!.includes(`onLanguage:${id}`))) {
         this.pending.set(m.id, m);
         continue;
       }
@@ -451,10 +465,12 @@ class ExtensionHost {
         findFiles: (projectPath, glob) => findFiles(projectPath, glob),
         openFile: (projectPath, path, line, column) => this.rpc.notify('openFile', projectPath, path, line, column),
         onDidChangeFiles: (listener) => this.on('filesChanged', moduleId, listener),
+        renameFile: (projectPath, path, newName) => this.rpc.call<string>('renameFile', projectPath, path, newName),
       },
       window: {
         showMessage: (message, options) => this.rpc.notify('showMessage', { message, kind: options?.kind ?? 'info', projectPath: options?.projectPath, moduleId }),
         notify: (n) => this.rpc.notify('notify', { ...n, moduleId }),
+        showInput: (projectPath, options) => this.rpc.call<string | null>('showInput', projectPath, options),
       },
       languageServer: {
         restart: () => this.rpc.notify('restartLanguageServer', moduleId),
@@ -462,6 +478,8 @@ class ExtensionHost {
       languages: {
         registerVersions: (languageId, provider) => void this.versionProviders.set(languageId, provider),
         getVersion: (projectPath, languageId) => this.rpc.call<LanguageVersion | null>('languageVersion', projectPath, languageId),
+        onDidRenameSymbol: (listener) => this.on('symbolRenamed', moduleId, listener),
+        registerDocComment: (languageId, provide) => void this.docComments.set(languageId, provide),
       },
       terminal: {
         run: (projectPath, options) => this.rpc.notify('runInTerminal', projectPath, options.name, options.command),

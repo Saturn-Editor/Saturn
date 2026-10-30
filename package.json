@@ -1,7 +1,7 @@
 {
   "name": "saturn-core",
   "version": "0.0.5",
-  "saturnApi": "0.3.0",
+  "saturnApi": "0.4.0",
   "description": "A lightweight, customisable, and extensible code editor.",
   "author": "Lewis Milburn",
   "main": "out/main/index.js",
@@ -44,6 +44,7 @@
     "@xterm/xterm": "^6.0.0",
     "electron-updater": "6.8.11",
     "fflate": "^0.8.2",
+    "hash-wasm": "^4.12.0",
     "node-pty": "^1.1.0",
     "preact": "^11.0.2",
     "vscode-jsonrpc": "^10.0.0",

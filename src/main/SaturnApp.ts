@@ -33,8 +33,10 @@ import { RunConfigStore } from './Store/RunConfigStore';
 import { TestSetStore } from './Store/TestSetStore';
 import { SettingsStore } from './Store/SettingsStore';
 import { WindowManager } from './WindowManager';
+import { NotebookCrypto } from './Notebooks/NotebookCrypto';
 import { NotebookIpc } from './Notebooks/NotebookIpc';
 import { NotebookStore } from './Notebooks/NotebookStore';
+import { FileStore } from './Store/FileStore';
 
 const nodePtyFactory: PtyFactory = (shell, args, opts) => {
   const pty = spawn(shell, args, { name: 'xterm-256color', ...opts });
@@ -106,7 +108,12 @@ export class SaturnApp {
       paths.dir('module-storage'),
     );
     this.serveIcons(modules, paths.dir('themes'));
-    new NotebookIpc(new NotebookStore(paths.file('notebooks.json'), paths.file('notebook-settings.json'), paths.dir('notebooks')), windows).register();
+    const notebookKeys = new NotebookCrypto(new FileStore<Record<string, string>>(
+      paths.file('notebook-keys.json'),
+      {},
+      (v): v is Record<string, string> => typeof v === 'object' && v !== null && Object.values(v).every((s) => typeof s === 'string'),
+    ));
+    new NotebookIpc(new NotebookStore(paths.file('notebooks.json'), paths.file('notebook-settings.json'), paths.dir('notebooks')), windows, notebookKeys).register();
     let router: IpcRouter | null = null;
     // Set once everything it needs exists (below).
     let resetSaturn: () => Promise<void> = async () => undefined;
@@ -159,6 +166,9 @@ export class SaturnApp {
       diagnostics: (projectPath, path, diagnostics) => router?.sendToProject(projectPath, 'languages', 'diagnostics', path, diagnostics),
       message: (message) => router?.broadcast('modules', 'message', message),
       notify: (n) => notifications.add(n),
+      applyEdits: async (projectPath, files) => {
+        await router?.requestFromProject(projectPath, 'applyEditsRequest', files);
+      },
     });
     const debug = new DebugService(new BreakpointStore(paths.file('breakpoints.json')), {
       changed: (projectPath, state) => router?.sendToProject(projectPath, 'debug', 'changed', state),
@@ -184,6 +194,11 @@ export class SaturnApp {
         ? router?.sendToProject(projectPath, 'modules', 'webviewPost', panelId, message)
         : router?.broadcast('modules', 'webviewPost', panelId, message)),
       webviewRefresh: (panelId) => router?.broadcast('modules', 'webviewRefresh', panelId),
+      showInput: async (projectPath, options) => (router ? router.requestFromProject<string | null>(projectPath, 'inputRequest', options) : null),
+      renameFile: async (projectPath, path, newName) => {
+        if (!router) throw new Error('Saturn is not ready');
+        return router.requestFromProject<string>(projectPath, 'renameFileRequest', path, newName);
+      },
     });
     // Closing a project's window: modules release what they hold for it, and its language servers stop.
     windows.onEditorOpened((projectPath) => host.projectOpened(projectPath));
@@ -203,7 +218,7 @@ export class SaturnApp {
       layouts: new LayoutStore(paths),
       terminals,
       runs: new RunConfigStore(paths),
-      testSets: new TestSetStore(paths),
+      testSets: new TestSetStore(),
       modules,
       host,
       languageServers,

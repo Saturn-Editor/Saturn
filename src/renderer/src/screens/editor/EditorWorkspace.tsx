@@ -3,7 +3,7 @@ import { createContext } from 'preact';
 import { useContext } from 'preact/hooks';
 import type { EditorView } from '@codemirror/view';
 import type { SaturnApi } from '@shared/api';
-import { applyTextEdits, type FileEdits, type MessageKind, type ReferenceLocation } from '@shared/modules';
+import { applyTextEdits, type FileEdits, type InputOptions, type MessageKind, type ReferenceLocation } from '@shared/modules';
 import { TestsIcon, CollapseAllIcon, CommitIcon, DebugIcon, ExpandAllIcon, IconButton, RefreshIcon, FileIcon, FolderIcon, GitIcon, NoticesIcon, OutlineIcon, TerminalIcon, UsagesIcon } from '@renderer/components';
 import { DebugController } from '@renderer/panels/builtin/DebugController';
 import { DebugPanel } from '@renderer/panels/builtin/DebugPanel';
@@ -20,7 +20,7 @@ import { CommandRegistry } from '@renderer/commands/CommandRegistry';
 import { EditorDocuments } from '@renderer/editor/EditorDocuments';
 import { DockLayoutModel } from '@renderer/panels/DockLayoutModel';
 import { PanelRegistry, type PanelDefinition } from '@renderer/panels/PanelRegistry';
-import { emptyPage, PAGE_EXTENSION } from '@shared/notebooks';
+import { emptyPage, PAGE_EXTENSION, type NotebookLock } from '@shared/notebooks';
 import { PreviewRegistry } from '@renderer/preview/PreviewRegistry';
 import { ModuleBridge } from '@renderer/modules/ModuleBridge';
 import { ProjectPanel } from '@renderer/panels/builtin/ProjectPanel';
@@ -51,6 +51,30 @@ export class EditorWorkspace {
   /** Something just done that can be undone (a deleted file), shown with an Undo button by UndoToast. */
   readonly undo = signal<{ text: string; run: () => Promise<void>; at: number } | null>(null);
   /** A branch switch waiting for the user to choose what happens to uncommitted changes (see BranchSwitchPrompt). */
+  readonly notebookLock = signal<NotebookLock>('none');
+  readonly pageSavers = new Set<() => Promise<void>>();
+  readonly pageReloads = signal<Record<string, number>>({});
+
+  readonly pageTitles = signal<Record<string, string>>({});
+
+  titleOf(path: string): string {
+    return this.pageTitles.value[path] ?? (this.notebookLock.value === 'locked' ? 'Locked page' : 'Untitled');
+  }
+
+  async refreshTitles(): Promise<void> {
+    const titles = await this.api.notebooks.pageTitles().catch(() => ({}));
+    this.pageTitles.value = titles;
+    this.documents.renamePages();
+  }
+
+  async renamePage(path: string, title: string): Promise<void> {
+    await Promise.all([...this.pageSavers].map((save) => save()));
+    await this.api.notebooks.setPageTitle(path, title);
+    this.pageReloads.value = { ...this.pageReloads.value, [path]: (this.pageReloads.value[path] ?? 0) + 1 };
+    await this.refreshTitles();
+  }
+  readonly encryptionDialog = signal<'encrypt' | 'password' | 'decrypt' | null>(null);
+  readonly inputPrompt = signal<{ options: InputOptions; resolve: (value: string | null) => void } | null>(null);
   readonly branchSwitchPrompt = signal<{ branch: string; resolve: (mode: 'bring' | 'shelve' | null) => void } | null>(null);
   /** Requests from the Project panel's title-bar buttons; the panel acts on each new one. */
   readonly projectTreeRequest = signal<{ action: 'expandAll' | 'collapseAll' | 'refresh'; at: number } | null>(null);
@@ -111,13 +135,27 @@ export class EditorWorkspace {
     return path;
   }
 
+  readonly notebookName = signal<string | null>(null);
+
   get projectName(): string {
-    return baseName(this.projectPath);
+    return this.notebookName.value ?? baseName(this.projectPath);
   }
 
   async load(): Promise<void> {
     // Modules first, so their panels are known before the saved layout is applied.
     if (!this.isNotebook) await this.modules.start();
+    else {
+      this.notebookLock.value = await this.api.notebooks.lockState().catch(() => 'none' as const);
+      this.notebookName.value = await this.api.notebooks.name().catch(() => null);
+      this.documents.pageName = (path) => this.titleOf(path);
+      await this.refreshTitles();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      this.api.fs.onChanged(() => {
+        clearTimeout(timer);
+        timer = setTimeout(() => void this.refreshTitles(), 200);
+      });
+      this.notebookLock.subscribe(() => void this.refreshTitles());
+    }
     this.layout = new DockLayoutModel(this.panels, await this.api.layout.load());
     this.layout.clampTo({ width: window.innerWidth, height: window.innerHeight });
     this.layout.state.subscribe(() => this.scheduleSave());
@@ -332,6 +370,27 @@ export class EditorWorkspace {
     const add = (id: string, title: string, run: () => void | Promise<void>) =>
       this.commands.register({ id: `core.${id}`, title, source, run });
 
+    if (this.isNotebook) {
+      add('renameNotebook', 'Rename Notebook…', async () => {
+        const name = await new Promise<string | null>((resolve) => {
+          this.inputPrompt.value = { options: { title: 'Rename notebook', value: this.projectName, placeholder: 'Notebook name' }, resolve };
+        });
+        if (!name || name === this.projectName) return;
+        try {
+          this.notebookName.value = await this.api.notebooks.rename(name);
+        } catch (e) {
+          this.notice.value = { text: e instanceof Error ? e.message : String(e), kind: 'error' };
+        }
+      });
+      add('encryptNotebook', 'Encrypt Notebook…', () => void (this.encryptionDialog.value = 'encrypt'));
+      add('notebookPassword', 'Change Notebook Password…', () => void (this.encryptionDialog.value = 'password'));
+      add('decryptNotebook', 'Remove Notebook Encryption…', () => void (this.encryptionDialog.value = 'decrypt'));
+      add('lockNotebook', 'Lock Notebook', async () => {
+        await Promise.all([...this.pageSavers].map((save) => save()));
+        await this.api.notebooks.lock();
+        this.notebookLock.value = await this.api.notebooks.lockState();
+      });
+    }
     add('openSettings', 'Open Settings', () => this.api.windows.openSettings());
     add('openMarketplace', 'Open Marketplace', () => this.api.windows.openMarketplace());
     add('toggleTerminal', 'Toggle Terminal', () => this.layout.toggle('terminal'));

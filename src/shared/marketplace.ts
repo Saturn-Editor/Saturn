@@ -38,7 +38,7 @@ export interface MarketplaceEntry {
   repo: string;
   /** A picture for the Marketplace (https URL). */
   image?: string;
-  /** Languages only: pre-selected in the first-launch welcome popup. */
+  /** Languages and extensions: pre-selected in the first-launch welcome popup. */
   default?: boolean;
   /** Releases, newest first. */
   versions: MarketplaceVersion[];
@@ -105,7 +105,7 @@ export function parseMarketplaceList(kind: MarketplaceKind, v: unknown): Marketp
     if (e.image !== undefined && !(typeof e.image === 'string' && e.image.startsWith('https://'))) continue;
     const versions = Array.isArray(e.versions) ? e.versions.filter((r) => validVersion(r, e.repo, needsApi)) : [];
     if (versions.length === 0) continue;
-    entries.push({ ...e, default: kind === 'languages' ? e.default === true : undefined, versions });
+    entries.push({ ...e, default: kind !== 'themes' ? e.default === true : undefined, versions });
   }
   return entries;
 }

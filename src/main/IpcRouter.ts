@@ -4,7 +4,7 @@ import { basename, join, resolve } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { channel } from '@shared/api';
 import type { MarketplaceKind } from '@shared/marketplace';
-import { MANIFEST_FILES, SATURN_API_VERSION, type CompletionRequest, type DocumentRequest, type EditorEvent, type LanguageVersion, type SettingValue, type TestSet, type TreeItem } from '@shared/modules';
+import { MANIFEST_FILES, SATURN_API_VERSION, type CodeActionRequest, type CompletionRequest, type DocCommentRequest, type DocumentRequest, type EditorEvent, type SymbolRename, type LanguageVersion, type SettingValue, type TestSet, type TreeItem } from '@shared/modules';
 import type { AppFolder, AppInfo, AppSettings, Breakpoint, LayoutState, NewProjectRequest, RebaseStep, RunEntry, ThemeMode } from '@shared/types';
 import type { AppPaths } from './Helpers/AppPaths';
 import type { ExtensionHostService } from './Services/ExtensionHostService';
@@ -263,10 +263,10 @@ export class IpcRouter {
   private registerMarketplace(): void {
     const { marketplace } = this.services;
     this.handle('marketplace', 'list', (_e, kind: MarketplaceKind) => marketplace.fetchList(kind));
-    this.handle('marketplace', 'installLanguage', (_e, id: string) => marketplace.installModule('language', id));
-    this.handle('marketplace', 'installExtension', (_e, id: string) => marketplace.installModule('extension', id));
-    this.handle('marketplace', 'installTheme', async (_e, id: string) => {
-      await marketplace.installTheme(id);
+    this.handle('marketplace', 'installLanguage', (_e, id: string, version?: string) => marketplace.installModule('language', id, version));
+    this.handle('marketplace', 'installExtension', (_e, id: string, version?: string) => marketplace.installModule('extension', id, version));
+    this.handle('marketplace', 'installTheme', async (_e, id: string, version?: string) => {
+      await marketplace.installTheme(id, version);
       this.broadcast('themes', 'listChanged');
     });
   }
@@ -282,6 +282,20 @@ export class IpcRouter {
     if (win) this.send(win.webContents, area, name, ...args);
     const debugWin = area === 'debug' ? this.services.windows.debugWindowFor(projectPath) : undefined;
     if (debugWin && !debugWin.isDestroyed()) this.send(debugWin.webContents, area, name, ...args);
+  }
+
+  private readonly replies = new Map<number, { resolve: (value: unknown) => void; reject: (e: Error) => void }>();
+  private nextReply = 0;
+
+  requestFromProject<T>(projectPath: string, name: string, ...args: unknown[]): Promise<T> {
+    const win = this.services.windows.editorFor(projectPath);
+    if (!win) return Promise.reject(new Error('That project is not open'));
+    const id = ++this.nextReply;
+    return new Promise<T>((resolve, reject) => {
+      this.replies.set(id, { resolve: resolve as (value: unknown) => void, reject });
+      win.once('closed', () => this.replies.get(id)?.reject(new Error('The window closed')));
+      this.send(win.webContents, 'modules', name, id, ...args);
+    }).finally(() => this.replies.delete(id));
   }
 
   /** Marketplace → Upload: asks for a folder or a .zip file to install; null if cancelled. */
@@ -333,6 +347,12 @@ export class IpcRouter {
     this.handle('languages', 'symbols', (e, req: DocumentRequest) => languageServers.symbols(this.projectOf(e), req));
     this.handle('languages', 'references', (e, req: CompletionRequest) => languageServers.references(this.projectOf(e), req));
     this.handle('languages', 'rename', (e, req: CompletionRequest & { newName: string }) => languageServers.rename(this.projectOf(e), req));
+    this.handle('languages', 'codeActions', (e, req: CodeActionRequest) => languageServers.codeActions(this.projectOf(e), req));
+    this.handle('languages', 'inlayHints', (e, req: DocumentRequest & { fromLine: number; toLine: number }) => languageServers.inlayHints(this.projectOf(e), req));
+    this.handle('languages', 'codeLenses', (e, req: DocumentRequest) => languageServers.codeLenses(this.projectOf(e), req));
+    this.handle('languages', 'runCodeLens', (e, languageId: string, path: string, index: number) => languageServers.runCodeLens(this.projectOf(e), languageId, path, index));
+    this.handle('languages', 'semanticTokens', (e, req: DocumentRequest) => languageServers.semanticTokens(this.projectOf(e), req));
+    this.handle('languages', 'runCodeAction', (e, languageId: string, index: number) => languageServers.runCodeAction(this.projectOf(e), languageId, index));
     this.handle('languages', 'format', (e, req: DocumentRequest & { tabSize: number; insertSpaces: boolean }) => languageServers.format(this.projectOf(e), req));
     this.handle('languages', 'signatureHelp', (e, req: CompletionRequest) => languageServers.signatureHelp(this.projectOf(e), req));
     this.handle('languages', 'syncDocument', async (e, req: { path: string; languageId: string; text: string }) => {
@@ -361,6 +381,13 @@ export class IpcRouter {
     });
     this.handle('tests', 'run', (e, controllerId: string, ids: string[] | null, runId: string, coverage?: boolean) => host.testsRun(controllerId, ids, runId, ctx(e), !!coverage));
     this.handle('modules', 'renderPreview', (e, id: string, text: string, path: string) => host.renderPreview(id, text, { ...ctx(e), path }));
+    this.handle('modules', 'reply', (_e, id: number, value: unknown, error?: string) => {
+      const pending = this.replies.get(id);
+      if (error) pending?.reject(new Error(error));
+      else pending?.resolve(value);
+    });
+    this.handle('modules', 'symbolRenamed', (e, event: SymbolRename) => host.symbolRenamed(event, ctx(e)));
+    this.handle('modules', 'docComment', (e, languageId: string, request: DocCommentRequest) => host.docComment(languageId, request, ctx(e)));
     this.handle('modules', 'templateFile', (e, id: string, name: string, dir: string) => host.templateFile(id, { ...ctx(e), name, dir }));
     this.handle('modules', 'webviewHtml', (e, panelId: string) => host.webviewHtml(panelId, ctx(e)));
     this.handle('modules', 'webviewMessage', (e, panelId: string, message: unknown) => host.webviewMessage(panelId, message, ctx(e)));
@@ -486,7 +513,7 @@ export class IpcRouter {
       const chosen = (await this.services.settings.app()).projectsFolder;
       if (chosen && (await stat(chosen).then((s) => s.isDirectory(), () => false))) return chosen;
       const dev = join(homedir(), 'SaturnProjects');
-      return (await stat(dev).then((s) => s.isDirectory(), () => false)) ? dev : homedir();
+      return mkdir(dev, { recursive: true }).then(() => dev, () => homedir());
     });
   }
 

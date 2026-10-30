@@ -1,17 +1,18 @@
 import { useEffect, useState } from 'preact/hooks';
 import { chooseVersion, type MarketplaceEntry } from '@shared/marketplace';
+import type { ModuleKind } from '@shared/modules';
 import { Button, Checkbox, DialogFooter, Heading, Logo, ModuleIcon } from '@renderer/components';
 import { isUpToDate, MarketplaceEntries, useInstalledModules, useMarketplaceList } from '@renderer/screens/MarketplaceIndex';
 import { ModeToggle } from '@renderer/theme/ModeToggle';
 import { errorText } from '@renderer/helpers';
 
 
-function LanguagePicker({ entries, selected, onToggle }: { entries: MarketplaceEntry[]; selected: Set<string>; onToggle: (id: string, on: boolean) => void }) {
+function ModulePicker({ kind, entries, selected, onToggle }: { kind: ModuleKind; entries: MarketplaceEntry[]; selected: Set<string>; onToggle: (id: string, on: boolean) => void }) {
   return (
     <div class="flex flex-col">
       {entries.map((l) => (
-        <div key={l.id} class="flex items-center gap-3 py-1.5 border-b border-divider" data-testid="onboarding-language">
-          <Checkbox checked={selected.has(l.id)} onChange={(on) => onToggle(l.id, on)} testId={`onboarding-language-${l.id}`} />
+        <div key={l.id} class="flex items-center gap-3 py-1.5 border-b border-divider" data-testid={`onboarding-${kind}`}>
+          <Checkbox checked={selected.has(l.id)} onChange={(on) => onToggle(l.id, on)} testId={`onboarding-${kind}-${l.id}`} />
           <ModuleIcon icon={l.image} badge={l.name.slice(0, 2).toUpperCase()} class="size-6" />
           <div class="flex-1 min-w-0">
             <div class="text-strong truncate">{l.name}</div>
@@ -23,40 +24,61 @@ function LanguagePicker({ entries, selected, onToggle }: { entries: MarketplaceE
   );
 }
 
-/** First-launch popup: pick Light or Dark and which marketplace languages to install. */
-export function OnboardingScreen() {
-  const [list, reloadList] = useMarketplaceList('languages');
-  const installed = useInstalledModules();
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [progress, setProgress] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+const installable = (entries: MarketplaceEntry[]) => entries.filter((l) => chooseVersion(l).installable);
 
-  // Only languages with a version this Saturn can install are offered.
-  const installable = (entries: MarketplaceEntry[]) => entries.filter((l) => chooseVersion(l).installable);
-  // Languages marked `default` in the marketplace start ticked.
+function useChoices(kind: ModuleKind) {
+  const [list, reload] = useMarketplaceList(kind === 'language' ? 'languages' : 'extensions');
+  const installed = useInstalledModules(kind);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   useEffect(() => {
     if (list?.status === 'loaded') setSelected(new Set(installable(list.entries).filter((l) => l.default).map((l) => l.id)));
   }, [list]);
-
   const toggle = (id: string, on: boolean) => {
     const next = new Set(selected);
     if (on) next.add(id);
     else next.delete(id);
     setSelected(next);
   };
+  const chosen = () => (list?.status === 'loaded' ? installable(list.entries).filter((l) => selected.has(l.id) && !isUpToDate(installed, l)) : []);
+  return { kind, list, reload, installed, selected, toggle, chosen };
+}
+
+function ModuleSection({ title, noun, choices }: { title: string; noun: string; choices: ReturnType<typeof useChoices> }) {
+  return (
+    <section>
+      <Heading>{title}</Heading>
+      <MarketplaceEntries
+        state={choices.list}
+        filter={(l) => !!chooseVersion(l).installable}
+        hide={(l) => isUpToDate(choices.installed, l)}
+        allHidden={`All available ${noun} are already installed.`}
+        onRetry={choices.reload}
+      >
+        {(entries) => <ModulePicker kind={choices.kind} entries={entries} selected={choices.selected} onToggle={choices.toggle} />}
+      </MarketplaceEntries>
+    </section>
+  );
+}
+
+export function OnboardingScreen() {
+  const languages = useChoices('language');
+  const extensions = useChoices('extension');
+  const [progress, setProgress] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const finish = async () => {
-    const chosen = list?.status === 'loaded'
-      ? installable(list.entries).filter((l) => selected.has(l.id) && !isUpToDate(installed, l))
-      : [];
+    const queue = [
+      ...languages.chosen().map((e) => ({ e, install: window.saturn.marketplace.installLanguage })),
+      ...extensions.chosen().map((e) => ({ e, install: window.saturn.marketplace.installExtension })),
+    ];
     const failed: string[] = [];
     setError(null);
-    for (const l of chosen) {
-      setProgress(`Installing ${l.name}…`);
+    for (const { e, install } of queue) {
+      setProgress(`Installing ${e.name}…`);
       try {
-        await window.saturn.marketplace.installLanguage(l.id);
-      } catch (e) {
-        failed.push(`${l.name}: ${errorText(e)}`);
+        await install(e.id);
+      } catch (err) {
+        failed.push(`${e.name}: ${errorText(err)}`);
       }
     }
     setProgress(null);
@@ -76,18 +98,8 @@ export function OnboardingScreen() {
           <ModeToggle />
           <p class="mt-1.5 mb-0 text-muted text-[11px]">More themes are available in the Saturn Marketplace.</p>
         </section>
-        <section>
-          <Heading>Languages</Heading>
-          <MarketplaceEntries
-            state={list}
-            filter={(l) => !!chooseVersion(l).installable}
-            hide={(l) => isUpToDate(installed, l)}
-            allHidden="All available languages are already installed."
-            onRetry={reloadList}
-          >
-            {(entries) => <LanguagePicker entries={entries} selected={selected} onToggle={toggle} />}
-          </MarketplaceEntries>
-        </section>
+        <ModuleSection title="Languages" noun="languages" choices={languages} />
+        <ModuleSection title="Extensions" noun="extensions" choices={extensions} />
         {error && <p class="m-0 text-accent" role="alert">{error}</p>}
       </div>
       <DialogFooter>

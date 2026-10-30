@@ -27,8 +27,9 @@
 .notebook-content input[type="checkbox"] { accent-color: var(--saturn-accent); }
 
 .notebook-content blockquote { border-left: 3px solid var(--saturn-border); padding-left: 1em; color: var(--saturn-muted); }
-.notebook-content code { font-family: var(--font-mono); font-size: 0.9em; background: var(--saturn-panel); padding: 0.1em 0.3em; }
-.notebook-content pre { font-family: var(--font-mono); font-size: 12px; background: var(--saturn-panel); border: 1px solid var(--saturn-divider); padding: 0.8em 1em; overflow-x: auto; }
+.notebook-page { --notebook-code-bg: var(--saturn-panel); --notebook-code-text: var(--saturn-text); --notebook-code-border: var(--saturn-divider); }
+.notebook-content code { font-family: var(--font-mono); font-size: 0.9em; background: var(--notebook-code-bg, var(--saturn-panel)); color: var(--notebook-code-text, inherit); padding: 0.1em 0.3em; }
+.notebook-content pre { font-family: var(--font-mono); font-size: 12px; background: var(--notebook-code-bg, var(--saturn-panel)); color: var(--notebook-code-text, inherit); border: 1px solid var(--notebook-code-border, var(--saturn-divider)); padding: 0.8em 1em; overflow-x: auto; }
 .notebook-content pre code { background: none; padding: 0; }
 .notebook-content .notebook-code { position: relative; }
 .notebook-content .notebook-code-language {

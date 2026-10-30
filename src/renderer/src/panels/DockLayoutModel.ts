@@ -108,8 +108,11 @@ export class DockLayoutModel {
     const placed = new Set(DOCKS.flatMap((d) => docks[d].panels));
     for (const def of this.registry.all()) {
       if (placed.has(def.id)) continue;
-      docks[def.defaultDock].panels.push(def.id);
-      docks[def.defaultDock].active ??= def.id;
+      const dock = docks[def.defaultDock];
+      const terminal = dock.panels.indexOf('terminal');
+      if (terminal >= 0) dock.panels.splice(terminal, 0, def.id);
+      else dock.panels.push(def.id);
+      dock.active ??= def.id;
     }
     this.state.value = { docks };
   }
