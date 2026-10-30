@@ -109,12 +109,16 @@ export const KEYMAP_ACTIONS: KeymapAction[] = [
     bindings: { os: 'F2', intellij: 'Shift-F6', visualstudio: 'F2', vscode: 'F2' },
   },
   {
+    id: 'editor.quickFix', title: 'Show Quick Fixes', scope: 'editor',
+    bindings: { os: 'Alt-Enter', intellij: 'Alt-Enter', visualstudio: 'Ctrl-.', vscode: 'Mod-.' },
+  },
+  {
     id: 'editor.formatDocument', title: 'Format Document', scope: 'editor',
     bindings: { os: 'Shift-Alt-f', intellij: 'Mod-Alt-l', visualstudio: 'Ctrl-Shift-f', vscode: 'Shift-Alt-f' },
   },
   {
-    id: 'editor.duplicateLine', title: 'Duplicate Line', scope: 'editor',
-    bindings: { os: 'Shift-Alt-ArrowDown', intellij: 'Mod-d', visualstudio: 'Ctrl-d', vscode: 'Shift-Alt-ArrowDown' },
+    id: 'editor.duplicateLine', title: 'Duplicate Selection or Line', scope: 'editor',
+    bindings: { os: 'Mod-d', intellij: 'Mod-d', visualstudio: 'Ctrl-d', vscode: 'Mod-d' },
   },
   {
     id: 'editor.deleteLine', title: 'Delete Line', scope: 'editor',

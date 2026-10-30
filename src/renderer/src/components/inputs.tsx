@@ -110,20 +110,21 @@ interface ToggleProps {
   on: boolean;
   onChange: (on: boolean) => void;
   label: string;
+  partial?: boolean;
 }
 
-export function Toggle({ on, onChange, label }: ToggleProps) {
+export function Toggle({ on, onChange, label, partial = false }: ToggleProps) {
   return (
     <button
       type="button"
       role="switch"
-      aria-checked={on}
+      aria-checked={partial ? 'mixed' : on}
       aria-label={label}
       title={label}
-      onClick={() => onChange(!on)}
-      class={`relative w-7 h-3.5 shrink-0 ${on ? 'bg-accent' : 'bg-border'}`}
+      onClick={() => onChange(partial ? true : !on)}
+      class={`relative w-7 h-3.5 shrink-0 ${partial ? 'bg-accent/50' : on ? 'bg-accent' : 'bg-border'}`}
     >
-      <span class={`absolute top-0.5 size-2.5 bg-strong ${on ? 'right-0.5' : 'left-0.5'}`} />
+      <span class={`absolute top-0.5 size-2.5 bg-strong ${partial ? 'left-[calc(50%-5px)]' : on ? 'right-0.5' : 'left-0.5'}`} />
     </button>
   );
 }

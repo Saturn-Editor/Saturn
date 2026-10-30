@@ -1,6 +1,6 @@
 import { useRef, useState } from 'preact/hooks';
-import { chooseVersion, type MarketplaceEntry, type MarketplaceKind } from '@shared/marketplace';
-import type { ModuleKind } from '@shared/modules';
+import { chooseVersion, compareVersions, type MarketplaceEntry, type MarketplaceKind } from '@shared/marketplace';
+import { SATURN_API_VERSION, satisfiesCaret, type ModuleKind } from '@shared/modules';
 import type { ThemeMode, ThemeSummary } from '@shared/types';
 import { Button, ContextMenu, ModuleIcon, SidebarMenu, TabMenu, Toggle } from '@renderer/components';
 import { MODE_LABELS } from '@renderer/theme/ModeToggle';
@@ -42,6 +42,38 @@ function UpdateButton({ entry, version, onUpdate }: { entry: MarketplaceEntry | 
   return null;
 }
 
+function VersionButton({ entry, version, onPick }: { entry: MarketplaceEntry | undefined; version: string | null; onPick: (version: string) => void }) {
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const choices = (entry?.versions ?? []).filter((v) => !v.saturnApi || satisfiesCaret(v.saturnApi, SATURN_API_VERSION));
+  if (choices.length < 2 && choices[0]?.version === version) return null;
+  if (!choices.length) return null;
+  return (
+    <>
+      <span
+        onClick={(e) => {
+          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          setAt({ x: r.right - 160, y: r.bottom + 2 });
+        }}
+      >
+        <Button testId={`versions-${entry!.id}`}>Versions</Button>
+      </span>
+      {at && (
+        <ContextMenu
+          at={at}
+          class="w-40"
+          items={choices.map((v) => ({
+            id: v.version,
+            label: v.version === version ? `${v.version} (installed)` : compareVersions(v.version, version ?? '0') < 0 ? `Downgrade to ${v.version}` : `Update to ${v.version}`,
+            testId: `version-${v.version}`,
+          }))}
+          onPick={(v) => v !== version && onPick(v)}
+          onClose={() => setAt(null)}
+        />
+      )}
+    </>
+  );
+}
+
 function listEntry(list: ListState | null, id: string): MarketplaceEntry | undefined {
   return list?.status === 'loaded' ? list.entries.find((e) => e.id === id) : undefined;
 }
@@ -50,11 +82,11 @@ function listEntry(list: ListState | null, id: string): MarketplaceEntry | undef
 const MODULE_KINDS = {
   language: {
     plural: 'languages', api: () => window.saturn.languages,
-    install: (id: string) => window.saturn.marketplace.installLanguage(id),
+    install: (id: string, version?: string) => window.saturn.marketplace.installLanguage(id, version),
   },
   extension: {
     plural: 'extensions', api: () => window.saturn.extensions,
-    install: (id: string) => window.saturn.marketplace.installExtension(id),
+    install: (id: string, version?: string) => window.saturn.marketplace.installExtension(id, version),
   },
 } as const;
 
@@ -77,6 +109,7 @@ function InstalledModules({ kind, list, onError, onBrowse }: { kind: ModuleKind;
         <Row key={m.id} badge={m.badge} icon={m.icon} title={m.name} version={m.version} detail={m.incompatible ?? ([m.languages.join(' '), m.description].filter(Boolean).join(' · ') || m.id)}>
           <Toggle on={m.enabled} label={m.enabled ? `Disable ${m.name}` : `Enable ${m.name}`} onChange={(on) => act(() => window.saturn.modules.setEnabled(m.id, on))} />
           <UpdateButton entry={listEntry(list, m.id)} version={m.version} onUpdate={() => act(() => k.install(m.id))} />
+          <VersionButton entry={listEntry(list, m.id)} version={m.version} onPick={(v) => act(() => k.install(m.id, v))} />
           <Button onClick={() => act(() => k.api().uninstall(m.id))}>Uninstall</Button>
         </Row>
       ))}
@@ -100,6 +133,7 @@ function InstalledThemes({ list, onError }: { list: ListState | null; onError: (
           {!t.builtIn && (
             <>
               <UpdateButton entry={listEntry(list, t.id)} version={t.version} onUpdate={() => act(() => window.saturn.marketplace.installTheme(t.id))} />
+              <VersionButton entry={listEntry(list, t.id)} version={t.version} onPick={(v) => act(() => window.saturn.marketplace.installTheme(t.id, v))} />
               <Button onClick={() => act(() => window.saturn.themes.uninstall(t.id))}>Uninstall</Button>
             </>
           )}

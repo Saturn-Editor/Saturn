@@ -14,6 +14,7 @@ import type { InfoDoc } from '@renderer/editor/EditorDocuments';
 import { DiffView } from './DiffView';
 import { MergeEditor } from './MergeEditor';
 import { PageView } from '@renderer/notebooks/PageView';
+import { UnlockNotebook } from '@renderer/notebooks/NotebookLock';
 import { useWorkspace } from './EditorWorkspace';
 import { blameShown, toggleBlame } from '@renderer/editor/blame';
 import { setTestLines } from '@renderer/editor/testGutter';
@@ -102,7 +103,7 @@ function InfoView({ info }: { info: InfoDoc }) {
   const ws = useWorkspace();
   if (info.reason === 'diff') return <DiffView diff={info.diff} workingPath={info.workingPath} />;
   if (info.reason === 'merge' && info.mergePath) return <MergeEditor path={info.mergePath} />;
-  if (info.reason === 'page') return <PageView key={info.path} path={info.path} />;
+  if (info.reason === 'page') return ws.notebookLock.value === 'locked' ? <UnlockNotebook /> : <PageView key={`${info.path}#${ws.pageReloads.value[info.path] ?? 0}`} path={info.path} />;
   const megabytes = ((info.bytes ?? 0) / 1024 / 1024).toFixed(1);
   return (
     <div class="h-full flex flex-col items-center justify-center gap-3 bg-editor text-muted" data-testid="file-info">
@@ -131,6 +132,7 @@ function EditorContextMenu({ view, path, at, onClose }: { view: EditorView; path
     ...(features.includes('references') ? [item('editor.findReferences', 'Find Usages')] : []),
     ...(features.includes('rename') ? [item('editor.rename', 'Rename Symbol')] : []),
     ...(features.includes('formatting') ? [item('editor.formatDocument', 'Format Document')] : []),
+    ...(ws.modules.languageFor(path)?.hasServer ? [item('editor.quickFix', 'Show Quick Fixes')] : []),
   ];
   const items: MenuEntry[] = [
     ...language,
@@ -351,6 +353,7 @@ function EditorPane({ group }: { group: number }) {
 
   const modeButtons = provider && (
     <>
+      <div class="w-px h-4 mx-1 shrink-0 bg-divider" role="separator" />
       <IconButton icon={<CodeIcon />} label="Code only" active={mode === 'code'} onClick={() => setMode('code')} />
       <IconButton icon={<SplitIcon />} label="Code and preview" active={mode === 'split'} onClick={() => setMode('split')} />
       <IconButton icon={<PreviewIcon />} label="Preview only" active={mode === 'preview'} onClick={() => setMode('preview')} />

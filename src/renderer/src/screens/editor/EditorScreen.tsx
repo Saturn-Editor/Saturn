@@ -6,6 +6,8 @@ import { IconStrip } from '@renderer/panels/IconStrip';
 import { EditorArea } from './EditorArea';
 import { EditorWorkspace, WorkspaceContext } from './EditorWorkspace';
 import { BranchSwitchPrompt } from './BranchSwitchPrompt';
+import { InputPrompt } from './InputPrompt';
+import { EncryptionDialog } from '@renderer/notebooks/NotebookLock';
 import { StatusBar } from './StatusBar';
 import { UndoToast } from './UndoToast';
 import { TopBar } from './TopBar';
@@ -57,6 +59,8 @@ export function EditorScreen() {
         </div>
         <StatusBar />
         <BranchSwitchPrompt />
+        <InputPrompt />
+        <EncryptionDialog />
         <UndoToast />
       </div>
     </WorkspaceContext.Provider>

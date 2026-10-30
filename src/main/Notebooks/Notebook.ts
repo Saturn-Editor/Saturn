@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { emptyPage, NOTEBOOK_FILE, NOTEBOOK_FORMAT, NOTEBOOK_VERSION, PAGE_EXTENSION, type NotebookMeta } from '@shared/notebooks';
+import { emptyPage, newPageId, NOTEBOOK_FILE, NOTEBOOK_FORMAT, NOTEBOOK_VERSION, PAGE_EXTENSION, type NotebookMeta } from '@shared/notebooks';
 
 export function isNotebookMeta(v: unknown): v is NotebookMeta {
   const m = v as NotebookMeta;
@@ -17,7 +17,12 @@ export async function createNotebook(root: string, name: string): Promise<void> 
   await mkdir(root, { recursive: true });
   const meta: NotebookMeta = { format: NOTEBOOK_FORMAT, version: NOTEBOOK_VERSION, name };
   await writeFile(join(root, NOTEBOOK_FILE), JSON.stringify(meta, null, 2));
-  await writeFile(join(root, `Untitled${PAGE_EXTENSION}`), JSON.stringify(emptyPage()));
+  await writeFile(join(root, `${newPageId()}${PAGE_EXTENSION}`), JSON.stringify(emptyPage()));
+}
+
+export async function writeNotebookName(root: string, name: string): Promise<void> {
+  const meta = await readNotebookMeta(root);
+  await writeFile(join(root, NOTEBOOK_FILE), JSON.stringify({ ...meta, name }, null, 2));
 }
 
 export async function readNotebookMeta(root: string): Promise<NotebookMeta> {

@@ -12,10 +12,12 @@ export interface ManifestLanguage {
   scopeName?: string;
   /** The module offers versions (e.g. JDKs) through saturn.languages.registerVersions; clicking the language in the status bar picks one per project. */
   versions?: boolean;
+  docCommentTriggers?: string[];
 }
 
 export type LanguageFeature =
-  | 'completion' | 'diagnostics' | 'hover' | 'definition' | 'symbols' | 'references' | 'rename' | 'formatting' | 'signatureHelp';
+  | 'completion' | 'diagnostics' | 'hover' | 'definition' | 'symbols' | 'references' | 'rename' | 'formatting' | 'signatureHelp'
+  | 'inlayHints' | 'codeLens' | 'semanticTokens';
 
 export const LANGUAGE_FEATURES: { id: LanguageFeature; label: string }[] = [
   { id: 'completion', label: 'Code completion' },
@@ -27,7 +29,35 @@ export const LANGUAGE_FEATURES: { id: LanguageFeature; label: string }[] = [
   { id: 'rename', label: 'Rename' },
   { id: 'formatting', label: 'Formatting' },
   { id: 'signatureHelp', label: 'Parameter hints' },
+  { id: 'inlayHints', label: 'Inlay hints' },
+  { id: 'codeLens', label: 'CodeLens' },
+  { id: 'semanticTokens', label: 'Semantic highlighting' },
 ];
+
+export interface InlayHint {
+  line: number;
+  character: number;
+  label: string;
+  kind?: 'type' | 'parameter';
+  paddingLeft?: boolean;
+  paddingRight?: boolean;
+}
+
+export interface CodeLensItem {
+  index: number;
+  line: number;
+  character: number;
+  lensLine: number;
+  title: string;
+  references?: boolean;
+}
+
+export interface SemanticToken {
+  line: number;
+  character: number;
+  length: number;
+  scopes: string[];
+}
 
 /** The module setting key holding a language feature's on/off switch (true unless turned off). */
 export function featureKey(feature: LanguageFeature): string {
@@ -77,6 +107,7 @@ export interface ManifestPanel {
   kind?: 'tree' | 'webview';
   /** Its icon: an .svg or .png file at the module folder root, e.g. "panel-icon.svg". Defaults to the module's icon, then "?". */
   icon?: string;
+  showWhen?: string[];
 }
 
 export interface ManifestCommand {
@@ -169,7 +200,6 @@ export interface LanguageVersionChoices {
 }
 
 export const versionsProvider = (languageId: string) => `@versions:${languageId}`;
-
 export const RUN_PROVIDER = '@run';
 export const TESTS_PROVIDER = '@tests';
 
@@ -373,6 +403,45 @@ export interface AppNotification {
   /** When it arrived (ms since epoch). */
   time: number;
   read: boolean;
+}
+
+export interface CodeActionRequest {
+  path: string;
+  languageId: string;
+  text: string;
+  line: number;
+  character: number;
+  endLine: number;
+  endCharacter: number;
+}
+
+export interface CodeAction {
+  index: number;
+  title: string;
+  kind?: string;
+  preferred?: boolean;
+}
+
+export interface InputOptions {
+  title: string;
+  value?: string;
+  placeholder?: string;
+}
+
+export interface SymbolRename {
+  path: string;
+  languageId: string;
+  oldName: string;
+  newName: string;
+  changedFiles: string[];
+}
+
+export interface DocCommentRequest {
+  path: string;
+  text: string;
+  line: number;
+  trigger: string;
+  indent: string;
 }
 
 /** A message a module shows the user (in the editor window's status bar). */

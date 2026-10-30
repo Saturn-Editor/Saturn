@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { unzipSync } from 'fflate';
 import {
-  chooseVersion, compareVersions, parseMarketplaceIndex, parseMarketplaceList, type MarketplaceEntry, type MarketplaceKind,
+  chooseVersion, compareVersions, parseMarketplaceIndex, parseMarketplaceList, type MarketplaceEntry, type MarketplaceKind, type MarketplaceVersion,
 } from '@shared/marketplace';
 import type { ThemeSummary } from '@shared/types';
-import { MANIFEST_FILES, type ModuleKind } from '@shared/modules';
+import { MANIFEST_FILES, SATURN_API_VERSION, satisfiesCaret, type ModuleKind } from '@shared/modules';
 import type { CodeModuleService } from './CodeModuleService';
 import type { ThemeService } from './ThemeService';
 
@@ -50,9 +50,9 @@ export class MarketplaceService {
   }
 
   /** Installs a language or extension: the newest release compatible with this Saturn. */
-  async installModule(kind: ModuleKind, id: string): Promise<void> {
+  async installModule(kind: ModuleKind, id: string, version?: string): Promise<void> {
     const entry = await this.entry(kind === 'language' ? 'languages' : 'extensions', id);
-    const release = chooseVersion(entry).installable;
+    const release = version ? pick(entry, version) : chooseVersion(entry).installable;
     if (!release) throw new Error(`Every version of ${entry.name} needs a newer Saturn; update Saturn to install it`);
     const file = MANIFEST_FILES[kind];
     await this.withDownload(release.download, release.sha256, async (dir) => {
@@ -64,9 +64,9 @@ export class MarketplaceService {
     });
   }
 
-  async installTheme(id: string): Promise<ThemeSummary> {
+  async installTheme(id: string, version?: string): Promise<ThemeSummary> {
     const entry = await this.entry('themes', id);
-    const release = entry.versions[0];
+    const release = version ? pick(entry, version) : entry.versions[0];
     return this.withDownload(release.download, release.sha256, async (dir) => {
       const theme = await readJson(join(dir, 'theme.json'), 'The download has no theme.json') as { id?: string; version?: string };
       if (theme.id !== entry.id || theme.version !== release.version) throw new Error(`The download doesn't match ${entry.name} ${release.version} in the marketplace`);
@@ -158,6 +158,13 @@ export async function withLocalZip<T>(file: string, manifest: string, use: (dir:
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+function pick(entry: MarketplaceEntry, version: string): MarketplaceVersion {
+  const release = entry.versions.find((v) => v.version === version);
+  if (!release) throw new Error(`${entry.name} ${version} isn't in the marketplace`);
+  if (release.saturnApi && !satisfiesCaret(release.saturnApi, SATURN_API_VERSION)) throw new Error(`${entry.name} ${version} needs a different Saturn module API (${release.saturnApi})`);
+  return release;
 }
 
 async function readJson(file: string, missing: string): Promise<unknown> {

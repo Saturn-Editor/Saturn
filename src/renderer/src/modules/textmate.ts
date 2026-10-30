@@ -165,9 +165,32 @@ function markForScopes(scopes: string[], rules: SyntaxRule[]): Decoration | null
   return mark;
 }
 
+export function semanticMark(scopes: string[]): Decoration | null {
+  return markForScopes(scopes, activeTheme()?.syntax ?? []);
+}
+
+export function isThemeChange(update: ViewUpdate): boolean {
+  return update.transactions.some((t) => t.effects.some((e) => e.is(themeChanged)));
+}
+
 interface LineTokens {
   marks: { from: number; to: number; mark: Decoration }[];
   end: StateStack;
+}
+
+const tokenizers = new WeakMap<EditorView, { grammar: IGrammar; lines: LineTokens[] }>();
+
+/** Whether the text just before `pos` is inside a comment, going by the view's grammar. */
+export function inComment(view: EditorView, pos: number): boolean {
+  const entry = tokenizers.get(view);
+  if (!entry) return false;
+  const line = view.state.doc.lineAt(pos);
+  const start = line.number > 1 ? entry.lines[line.number - 2]?.end : INITIAL;
+  if (!start) return false;
+  const column = pos - line.from;
+  const { tokens } = entry.grammar.tokenizeLine(line.text, start);
+  const token = tokens.find((t) => t.startIndex < column && column <= t.endIndex) ?? tokens[tokens.length - 1];
+  return !!token?.scopes.some((s) => s === 'comment' || s.startsWith('comment.'));
 }
 
 export function textMateHighlighting(grammar: IGrammar): Extension {
@@ -177,6 +200,7 @@ export function textMateHighlighting(grammar: IGrammar): Extension {
       lines: LineTokens[] = [];
 
       constructor(view: EditorView) {
+        tokenizers.set(view, this.entry);
         this.retokenize(view, 0, []);
         this.decorations = this.build(view);
       }
@@ -204,6 +228,11 @@ export function textMateHighlighting(grammar: IGrammar): Extension {
           this.retokenize(update.view, first, old, lastNew, lastNew - lastOld);
         } else return;
         this.decorations = this.build(update.view);
+      }
+
+      get entry() {
+        const plugin = this;
+        return { grammar, get lines() { return plugin.lines; } };
       }
 
       retokenize(view: EditorView, from: number, old: LineTokens[], settleAfter = -1, shift = 0) {

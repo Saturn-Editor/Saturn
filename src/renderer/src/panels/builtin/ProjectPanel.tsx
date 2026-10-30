@@ -3,8 +3,8 @@ import type { DirEntry } from '@shared/types';
 import { ContextMenu, SearchMenu, TextInput, TreeRow, type MenuEntry } from '@renderer/components';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
 import { isMac } from '@renderer/commands/keymap';
-import { NOTEBOOK_FILE } from '@shared/notebooks';
-import { createPage, createSubpage, hasSubpages, isPagePath, pageTitle, renamePage, subpageFolder } from '@renderer/notebooks/pages';
+import { newPageId, NOTEBOOK_FILE, PAGE_EXTENSION } from '@shared/notebooks';
+import { createPage, createSubpage, hasSubpages, isPagePath, pageId, subpageFolder } from '@renderer/notebooks/pages';
 import { errorText, parentOf } from '@renderer/helpers';
 
 interface Row {
@@ -175,13 +175,16 @@ export function ProjectPanel() {
   const rootEntry: DirEntry = { name: ws.projectName, path: root, kind: 'dir' };
   const rows: Row[] = [{ entry: rootEntry, depth: 0 }];
   const walk = (dir: string, depth: number) => {
-    const entries = children.get(dir) ?? [];
+    const listed = children.get(dir) ?? [];
+    const entries = ws.isNotebook
+      ? [...listed].sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'dir' ? -1 : 1) || labelOf(a).localeCompare(labelOf(b), undefined, { sensitivity: 'base' }))
+      : listed;
     const folders = new Map(entries.filter((e) => e.kind === 'dir').map((e) => [e.name.toLowerCase(), e.path]));
-    const pages = new Set(entries.filter((e) => isPagePath(e.path)).map((e) => pageTitle(e.path).toLowerCase()));
+    const pages = new Set(entries.filter((e) => isPagePath(e.path)).map((e) => pageId(e.path).toLowerCase()));
     for (const entry of entries) {
       if (ws.isNotebook && dir === root && entry.name === NOTEBOOK_FILE) continue;
       if (ws.isNotebook && entry.kind === 'dir' && pages.has(entry.name.toLowerCase())) continue;
-      const subpages = ws.isNotebook && isPagePath(entry.path) ? folders.get(pageTitle(entry.path).toLowerCase()) : undefined;
+      const subpages = ws.isNotebook && isPagePath(entry.path) ? folders.get(pageId(entry.path).toLowerCase()) : undefined;
       rows.push({ entry, depth, subpages });
       if (entry.kind === 'dir' && expanded.has(entry.path)) walk(entry.path, depth + 1);
       if (subpages && expanded.has(subpages)) walk(subpages, depth + 1);
@@ -189,7 +192,13 @@ export function ProjectPanel() {
   };
   if (expanded.has(root)) walk(root, 1);
 
-  const isNotebookPage = (entry: DirEntry) => ws.isNotebook && entry.kind === 'file' && isPagePath(entry.path);
+  function isNotebookPage(entry: DirEntry) {
+    return ws.isNotebook && entry.kind === 'file' && isPagePath(entry.path);
+  }
+
+  function labelOf(entry: DirEntry) {
+    return isNotebookPage(entry) ? ws.titleOf(entry.path) : entry.name;
+  }
 
   const activate = (entry: DirEntry) => (entry.kind === 'dir' ? toggle(entry.path) : void ws.documents.open(entry.path));
 
@@ -200,11 +209,13 @@ export function ProjectPanel() {
   const transfer = async (from: string, toDir: string, mode: 'cut' | 'copy') => {
     setProblem(null);
     try {
-      const carry = ws.isNotebook && isPagePath(from) && (await hasSubpages(from));
-      const to = mode === 'cut' ? await window.saturn.fs.move(from, toDir) : await window.saturn.fs.copy(from, toDir);
+      const page = ws.isNotebook && isPagePath(from);
+      const carry = page && (await hasSubpages(from));
+      let to = mode === 'cut' ? await window.saturn.fs.move(from, toDir) : await window.saturn.fs.copy(from, toDir);
+      if (page && mode === 'copy') to = await window.saturn.fs.rename(to, `${newPageId()}${PAGE_EXTENSION}`);
       if (carry) {
         const folderTo = mode === 'cut' ? await window.saturn.fs.move(subpageFolder(from), toDir) : await window.saturn.fs.copy(subpageFolder(from), toDir);
-        if (folderTo !== subpageFolder(to)) await window.saturn.fs.rename(folderTo, pageTitle(to));
+        if (folderTo !== subpageFolder(to)) await window.saturn.fs.rename(folderTo, pageId(to));
         if (mode === 'cut') ws.documents.moved(subpageFolder(from), subpageFolder(to));
       }
       if (mode === 'cut' && to !== from) {
@@ -231,7 +242,7 @@ export function ProjectPanel() {
       }
       void load(parentOf(entry.path));
       ws.undo.value = {
-        text: `Deleted ${isNotebookPage(entry) ? pageTitle(entry.path) : entry.name}`,
+        text: `Deleted ${labelOf(entry)}`,
         at: Date.now(),
         run: async () => {
           for (const id of ids) await window.saturn.fs.undoTrash(id);
@@ -342,14 +353,14 @@ export function ProjectPanel() {
   const rename = async (name: string) => {
     if (!renaming) return;
     const from = renaming;
-    const page = ws.isNotebook && isPagePath(from);
-    const to = page ? await renamePage(from, name) : await window.saturn.fs.rename(from, name);
+    if (ws.isNotebook && isPagePath(from)) {
+      setRenaming(null);
+      await ws.renamePage(from, name);
+      return;
+    }
+    const to = await window.saturn.fs.rename(from, name);
     setRenaming(null);
     ws.documents.moved(from, to);
-    if (page) {
-      ws.documents.moved(subpageFolder(from), subpageFolder(to));
-      setExpanded((prev) => new Set([...prev].map((p) => (p === subpageFolder(from) ? subpageFolder(to) : p))));
-    }
     // Keep a renamed folder's expanded state and loaded children under the new path.
     if (expanded.has(from)) setExpanded((prev) => new Set([...prev].map((p) => (p === from ? to : p))));
     await load(parentOf(from));
@@ -386,7 +397,10 @@ export function ProjectPanel() {
     const path = creating.templateId === 'notebook.page'
       ? (await createPage(creating.dir, name)).path
       : await ws.createFromTemplate(creating.templateId, creating.dir, name);
-    if (creating.templateId === 'notebook.page') void ws.documents.open(path);
+    if (creating.templateId === 'notebook.page') {
+      await ws.refreshTitles();
+      void ws.documents.open(path);
+    }
     setCreating(null);
     await load(creating.dir);
     setSelected(path);
@@ -411,11 +425,11 @@ export function ProjectPanel() {
       {rows.map(({ entry, depth, subpages }) => (
         <div key={entry.path} onContextMenu={(e) => openMenu(e, entry)}>
           {renaming === entry.path ? (
-            <NameRow depth={depth - 1} placeholder="Name" initial={isNotebookPage(entry) ? pageTitle(entry.path) : entry.name} onSubmit={rename} onCancel={() => setRenaming(null)} />
+            <NameRow depth={depth - 1} placeholder="Name" initial={labelOf(entry)} onSubmit={rename} onCancel={() => setRenaming(null)} />
           ) : (
             <TreeRow
               depth={depth}
-              label={isNotebookPage(entry) ? pageTitle(entry.path) : entry.name}
+              label={labelOf(entry)}
               expanded={entry.kind === 'dir' ? expanded.has(entry.path) : subpages ? expanded.has(subpages) : undefined}
               onToggle={subpages ? () => toggle(subpages) : undefined}
               selected={entry.path === selected}

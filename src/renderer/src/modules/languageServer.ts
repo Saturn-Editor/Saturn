@@ -1,9 +1,11 @@
-import { autocompletion, snippet, type Completion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete';
+import { acceptCompletion, autocompletion, snippet, type Completion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete';
 import { setDiagnostics, type Diagnostic as CmDiagnostic } from '@codemirror/lint';
-import { Facet, StateEffect, StateField, type EditorState, type Extension, type Text } from '@codemirror/state';
-import { EditorView, hoverTooltip, keymap, showPanel, showTooltip, ViewPlugin, type Panel, type Tooltip, type ViewUpdate } from '@codemirror/view';
-import type { CompletionItem, CompletionRequest, Diagnostic, FileEdits, ReferenceLocation, SourceLocation, TextEdit, TextRange } from '@shared/modules';
+import { Facet, Prec, StateEffect, StateField, type EditorState, type Extension, type Text } from '@codemirror/state';
+import { Decoration, EditorView, hoverTooltip, keymap, showPanel, showTooltip, ViewPlugin, WidgetType, type DecorationSet, type Panel, type Tooltip, type ViewUpdate } from '@codemirror/view';
+import type { CodeAction, CompletionItem, CompletionRequest, Diagnostic, FileEdits, ReferenceLocation, SourceLocation, TextEdit, TextRange } from '@shared/modules';
 import { editorBehaviour } from '@renderer/editor/codemirrorSetup';
+import { inComment } from './textmate';
+import { renderHover } from './hoverMarkdown';
 
 const SYNC_DELAY_MS = 300;
 
@@ -48,6 +50,20 @@ function toCm(doc: Text, list: Diagnostic[]): CmDiagnostic[] {
       severity: d.severity === 'hint' ? 'hint' : d.severity,
       message: d.message,
       source: d.source,
+      renderMessage: (view: EditorView) => {
+        const dom = document.createElement('span');
+        dom.append(d.message);
+        const fixes = document.createElement('button');
+        fixes.className = 'cm-saturn-diagnostic-fixes';
+        fixes.textContent = 'Quick fixes…';
+        fixes.addEventListener('mousedown', (e) => e.preventDefault());
+        fixes.addEventListener('click', () => {
+          view.dispatch({ selection: { anchor: from } });
+          quickFix(view);
+        });
+        dom.append(document.createElement('br'), fixes);
+        return dom;
+      },
     };
   });
 }
@@ -143,6 +159,7 @@ function completion(file: LspFile): Extension {
   const source = async (ctx: CompletionContext): Promise<CompletionResult | null> => {
     const word = ctx.matchBefore(/[\w#`[\]-]*/);
     if (!ctx.explicit && (!word || word.from === word.to)) return null;
+    if (!ctx.explicit && ctx.view && inComment(ctx.view, ctx.pos)) return null;
     const items = await window.saturn.languages.complete(request(ctx.state, file, ctx.pos)).catch(() => []);
     if (ctx.aborted || items.length === 0) return null;
     // Filter from the server's replace range when it gives one, else from the word before the cursor.
@@ -150,7 +167,7 @@ function completion(file: LspFile): Extension {
     const from = ranged?.range ? Math.min(rangeFrom(ctx.state, ranged.range).from, ctx.pos) : (word?.from ?? ctx.pos);
     return { from, options: items.map(option) };
   };
-  return autocompletion({ override: [source] });
+  return [autocompletion({ override: [source] }), Prec.highest(keymap.of([{ key: 'Tab', run: acceptCompletion }]))];
 }
 
 /** Hover text from the server, shown as plain text. */
@@ -158,15 +175,8 @@ function hover(file: LspFile): Extension {
   return hoverTooltip(async (view, pos) => {
     const text = await window.saturn.languages.hover(request(view.state, file, pos)).catch(() => null);
     if (!text) return null;
-    return {
-      pos,
-      create: () => {
-        const dom = document.createElement('div');
-        dom.className = 'cm-saturn-hover';
-        dom.textContent = text.replace(/^```\w*\n?|```$/gm, '').trim();
-        return { dom };
-      },
-    };
+    const dom = await renderHover(text, file.languageId);
+    return { pos, create: () => ({ dom }) };
   });
 }
 
@@ -245,7 +255,14 @@ function renamePanel(view: EditorView, target: { pos: number; word: string }): P
     close();
     if (!file || !newName || newName === target.word) return;
     void window.saturn.languages.rename({ ...request(view.state, file, target.pos), newName })
-      .then((files) => (files.length ? file.applyEdits(files) : 0))
+      .then(async (files) => {
+        if (!files.length) return 0;
+        const count = await file.applyEdits(files);
+        void window.saturn.modules.symbolRenamed({
+          path: file.path, languageId: file.languageId, oldName: target.word, newName, changedFiles: files.map((f) => f.path),
+        }).catch(() => undefined);
+        return count;
+      })
       .then((count) => file.notify(count ? `Renamed ${target.word} to ${newName} in ${count} file${count === 1 ? '' : 's'}` : `${target.word} can't be renamed here`))
       .catch((e: Error) => file.notify(`Couldn't rename ${target.word}: ${e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`, 'error'));
   });
@@ -386,11 +403,158 @@ const clickToDefinition = EditorView.domEventHandlers({
 });
 
 /** What a file gets from its language server: always sync (and diagnostics unless off), plus the features switched on. */
+const setQuickFixes = StateEffect.define<Tooltip | null>();
+
+const quickFixField = StateField.define<Tooltip | null>({
+  create: () => null,
+  update(value, tr) {
+    for (const e of tr.effects) if (e.is(setQuickFixes)) return e.value;
+    return tr.docChanged || tr.selection ? null : value;
+  },
+  provide: (f) => showTooltip.from(f),
+});
+
+function quickFixList(view: EditorView, file: LspFile, actions: CodeAction[]): HTMLElement {
+  const dom = document.createElement('div');
+  dom.className = 'cm-saturn-quickfix';
+  dom.dataset.testid = 'quick-fixes';
+  const close = () => {
+    view.dispatch({ effects: setQuickFixes.of(null) });
+    view.focus();
+  };
+  const run = (action: CodeAction) => {
+    close();
+    void window.saturn.languages.runCodeAction(file.languageId, action.index)
+      .then((files) => (files.length ? file.applyEdits(files) : 0))
+      .catch((e: Error) => file.notify(`Couldn't apply "${action.title}": ${e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`, 'error'));
+  };
+  const buttons = actions.map((action) => {
+    const button = document.createElement('button');
+    button.textContent = action.title;
+    button.addEventListener('mousedown', (e) => e.preventDefault());
+    button.addEventListener('click', () => run(action));
+    return button;
+  });
+  dom.addEventListener('keydown', (e) => {
+    const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    if (e.key === 'Escape') close();
+    else if (e.key === 'ArrowDown') buttons[(at + 1) % buttons.length].focus();
+    else if (e.key === 'ArrowUp') buttons[(at - 1 + buttons.length) % buttons.length].focus();
+    else return;
+    e.preventDefault();
+  });
+  dom.append(...buttons);
+  return dom;
+}
+
+export function quickFix(view: EditorView): boolean {
+  const file = view.state.facet(lspFile);
+  if (!file) return false;
+  const { from, to, head } = view.state.selection.main;
+  const start = view.state.doc.lineAt(from);
+  const end = view.state.doc.lineAt(to);
+  void window.saturn.languages.codeActions({
+    path: file.path,
+    languageId: file.languageId,
+    text: view.state.doc.toString(),
+    line: start.number - 1,
+    character: from - start.from,
+    endLine: end.number - 1,
+    endCharacter: to - end.from,
+  }).then((actions) => {
+    if (view.state.selection.main.head !== head) return;
+    if (!actions.length) {
+      file.notify('No quick fixes here');
+      return;
+    }
+    const sorted = [...actions].sort((a, b) => Number(!!b.preferred) - Number(!!a.preferred));
+    view.dispatch({
+      effects: setQuickFixes.of({
+        pos: head,
+        create: (v) => {
+          const dom = quickFixList(v, file, sorted);
+          return { dom, mount: () => (dom.firstElementChild as HTMLElement | null)?.focus() };
+        },
+      }),
+    });
+  }, () => file.notify("Couldn't get quick fixes", 'error'));
+  return true;
+}
+
+const LIGHTBULB_DELAY_MS = 500;
+const setBulb = StateEffect.define<number | null>();
+
+class BulbWidget extends WidgetType {
+  eq() {
+    return true;
+  }
+  toDOM(view: EditorView) {
+    const wrap = document.createElement('span');
+    wrap.className = 'cm-saturn-bulb';
+    wrap.title = 'Show quick fixes';
+    wrap.setAttribute('aria-label', 'Show quick fixes');
+    wrap.dataset.testid = 'lightbulb';
+    wrap.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M8 1a5 5 0 0 0-3 9v2a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-2a5 5 0 0 0-3-9zm-2 13h4v1H6z"/></svg>';
+    wrap.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      quickFix(view);
+    });
+    return wrap;
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+
+const bulbField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    for (const e of tr.effects) {
+      if (!e.is(setBulb)) continue;
+      if (e.value === null) return Decoration.none;
+      return Decoration.set([Decoration.widget({ widget: new BulbWidget(), side: 1 }).range(tr.state.doc.lineAt(e.value).to)]);
+    }
+    return tr.docChanged || tr.selection ? Decoration.none : value;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+const lightbulb = ViewPlugin.fromClass(class {
+  timer: ReturnType<typeof setTimeout> | undefined;
+  constructor(readonly view: EditorView) {}
+  update(update: ViewUpdate) {
+    if (!update.docChanged && !update.selectionSet) return;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => void this.check(), LIGHTBULB_DELAY_MS);
+  }
+  async check() {
+    const { view } = this;
+    const file = view.state.facet(lspFile);
+    const { from, to, head } = view.state.selection.main;
+    if (!file || !view.hasFocus) return;
+    const text = view.state.doc.toString();
+    const start = view.state.doc.lineAt(from);
+    const end = view.state.doc.lineAt(to);
+    const actions = await window.saturn.languages.codeActions({
+      path: file.path, languageId: file.languageId, text,
+      line: start.number - 1, character: from - start.from, endLine: end.number - 1, endCharacter: to - end.from,
+    }).catch(() => []);
+    if (view.state.doc.toString() !== text || view.state.selection.main.head !== head) return;
+    view.dispatch({ effects: setBulb.of(actions.length ? head : null) });
+  }
+  destroy() {
+    clearTimeout(this.timer);
+  }
+});
+
 export function languageServerFeatures(file: LspFile, on: { completion: boolean; hover: boolean; definition: boolean; signatureHelp: boolean }): Extension {
   // No gutter markers: the line-number column is kept free for breakpoints.
   return [
     lspFile.of(file),
     documentSync,
+    quickFixField,
+    bulbField,
+    lightbulb,
     ...(file.commands.rename ? [renameField] : []),
     ...(on.signatureHelp ? [signatureHelp(file)] : []),
     ...(on.hover ? [hover(file)] : []),

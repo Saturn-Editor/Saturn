@@ -6,6 +6,8 @@ import { errorText } from '@renderer/helpers';
 
 const ROOT = '\0root';
 
+const expandedByPanel = new Map<string, Set<string>>();
+
 /**
  * A tree panel whose items come from a language module (via the extension host). Clicking an item
  * opens its file if it has one, otherwise expands it; the chevron always expands. Right-click shows
@@ -14,7 +16,9 @@ const ROOT = '\0root';
 export function ModuleTreePanel({ panelId }: { panelId: string }) {
   const ws = useWorkspace();
   const [children, setChildren] = useState<Map<string, TreeItem[]>>(new Map());
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const memoryKey = `${ws.projectPath}\0${panelId}`;
+  const [expanded, setExpanded] = useState<Set<string>>(() => expandedByPanel.get(memoryKey) ?? new Set());
+  expandedByPanel.set(memoryKey, expanded);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; item: TreeItem } | null>(null);
@@ -34,6 +38,7 @@ export function ModuleTreePanel({ panelId }: { panelId: string }) {
 
   useEffect(() => {
     void load(null);
+    expandedRef.current.forEach((p) => void load(p));
     // A refresh of one item reloads just that subtree; a full refresh reloads the root and every expanded item.
     return window.saturn.modules.onTreeRefresh((id, itemId) => {
       if (id !== panelId) return;

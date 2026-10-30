@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { JSONContent } from '@tiptap/core';
-import { DEFAULT_PAGE_STYLE, emptyPage, isPageFile, type PageFile, type PageStyle } from '@shared/notebooks';
+import { DEFAULT_PAGE_STYLE, type PageFile, type PageStyle } from '@shared/notebooks';
 import { Button, IconButton } from '@renderer/components';
 import { errorText } from '@renderer/helpers';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
-import { createSubpage, listPages, PAGE_LINK, pageTitle, renamePage, subpageFolder } from './pages';
+import { createSubpage, pageForLink, pageLink } from './pages';
 import { PageEditor } from './PageEditor';
 import { FONT_CLASS, StyleEditor, styleVariables } from './StyleEditor';
 
@@ -13,7 +13,7 @@ const SAVE_DELAY_MS = 400;
 export function PageView({ path }: { path: string }) {
   const ws = useWorkspace();
   const [page, setPage] = useState<PageFile | null>(null);
-  const [title, setTitle] = useState(pageTitle(path));
+  const [title, setTitle] = useState(ws.titleOf(path));
   const [styling, setStyling] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const current = useRef<PageFile | null>(null);
@@ -28,11 +28,11 @@ export function PageView({ path }: { path: string }) {
     return () => window.removeEventListener('focus', read);
   }, []);
 
-  const save = () => {
+  const save = (): Promise<void> => {
     clearTimeout(timer.current);
-    if (!dirty.current || !current.current) return;
+    if (!dirty.current || !current.current) return Promise.resolve();
     dirty.current = false;
-    void window.saturn.fs.writeFile(path, JSON.stringify(current.current)).catch((e) => setProblem(errorText(e)));
+    return window.saturn.notebooks.writePage(path, current.current).catch((e) => setProblem(errorText(e)));
   };
 
   const change = (next: PageFile, now = false) => {
@@ -45,30 +45,25 @@ export function PageView({ path }: { path: string }) {
   };
 
   useEffect(() => {
-    setTitle(pageTitle(path));
-    void window.saturn.fs.readFile(path, { force: true }).then((result) => {
-      if (result.kind !== 'text') throw new Error("This page can't be read");
-      const parsed: unknown = result.text.trim() ? JSON.parse(result.text) : emptyPage();
-      if (!isPageFile(parsed)) throw new Error("This file isn't a Saturn notebook page");
+    void window.saturn.notebooks.readPage(path).then((parsed) => {
       current.current = parsed;
       setPage(parsed);
+      setTitle(parsed.title ?? 'Untitled');
     }).catch((e) => setProblem(errorText(e)));
-    return save;
+    ws.pageSavers.add(save);
+    return () => {
+      ws.pageSavers.delete(save);
+      void save();
+    };
   }, [path]);
 
   const rename = async () => {
     const next = title.trim();
-    if (!next || next === pageTitle(path)) return setTitle(pageTitle(path));
-    try {
-      save();
-      current.current = null;
-      const to = await renamePage(path, next);
-      ws.documents.moved(subpageFolder(path), subpageFolder(to));
-      ws.documents.moved(path, to);
-    } catch (e) {
-      setProblem(errorText(e));
-      setTitle(pageTitle(path));
-    }
+    const currentTitle = current.current?.title ?? 'Untitled';
+    if (!next || next === currentTitle || !current.current) return setTitle(currentTitle);
+    change({ ...current.current, title: next }, true);
+    await save();
+    await ws.refreshTitles();
   };
 
   if (!page) return <div class="h-full flex items-center justify-center text-muted bg-editor">{problem ?? 'Loading…'}</div>;
@@ -78,10 +73,9 @@ export function PageView({ path }: { path: string }) {
     background: page.background !== undefined ? page.background : defaults.background,
     text: page.text !== undefined ? page.text : defaults.text,
   };
-  const root = ws.projectPath;
 
   return (
-    <div class="relative h-full flex flex-col bg-editor" data-testid="notebook-page">
+    <div class="notebook-page relative h-full flex flex-col bg-editor" data-testid="notebook-page">
       <div class="flex items-center justify-end gap-1 h-9 px-2.5 shrink-0">
         <IconButton class="size-7" icon={<span class="font-serif text-[13px]">Aa</span>} label="Page style" active={styling} data-testid="notebook-style" onClick={() => setStyling(!styling)} />
       </div>
@@ -117,13 +111,18 @@ export function PageView({ path }: { path: string }) {
           key={path}
           doc={page.doc as JSONContent}
           onChange={(doc) => change({ ...current.current!, doc })}
-          targets={async () => (await listPages(root)).filter((p) => p.path !== path).map((p) => ({ href: `${PAGE_LINK}${p.path.slice(root.length + 1)}`, title: p.title }))}
-          onOpenPage={(href) => void ws.documents.open(`${root}/${href.slice(PAGE_LINK.length)}`)}
+          targets={async () => Object.entries(ws.pageTitles.value).filter(([p]) => p !== path).map(([p, t]) => ({ href: pageLink(p), title: t }))}
+          onOpenPage={(href) => {
+            const target = pageForLink(href, ws.pageTitles.value);
+            if (target) void ws.documents.open(target);
+            else setProblem("That page doesn't exist any more");
+          }}
           onAddSubpage={async () => {
             try {
               save();
               const created = await createSubpage(path);
-              return { href: `${PAGE_LINK}${created.path.slice(root.length + 1)}`, title: created.title };
+              void ws.refreshTitles();
+              return { href: pageLink(created.path), title: created.title };
             } catch (e) {
               setProblem(errorText(e));
               return null;

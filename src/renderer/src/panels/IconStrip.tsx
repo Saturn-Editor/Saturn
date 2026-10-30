@@ -46,17 +46,23 @@ export function IconStrip() {
     );
   };
 
-  const dropZone = (dock: DockId, count: number) => ({
+  const dropZone = (dock: DockId) => ({
     onDragOver: (e: DragEvent) => e.dataTransfer?.types.includes(PANEL_DRAG_TYPE) && e.preventDefault(),
     onDrop: (e: DragEvent) => {
       const id = e.dataTransfer?.getData(PANEL_DRAG_TYPE);
-      if (id) ws.layout.move(id, dock, count);
+      if (!id) return;
+      const items = [...(e.currentTarget as HTMLElement).children].filter((el) => (el as HTMLElement).dataset.testid !== `strip-${id}`);
+      const before = items.findIndex((el) => {
+        const r = el.getBoundingClientRect();
+        return e.clientY < r.top + r.height / 2;
+      });
+      ws.layout.move(id, dock, before === -1 ? items.length : before);
     },
   });
 
   return (
     <div ref={ref} class="relative w-9 shrink-0 flex flex-col items-center py-1 bg-panel border-r border-divider" data-testid="icon-strip">
-      <div class="flex flex-col items-center gap-1" data-testid="strip-top" {...dropZone('left', docks.left.panels.length)}>
+      <div class="flex flex-col items-center gap-1" data-testid="strip-top" {...dropZone('left')}>
         {top.map((id) => icon(id, 'left'))}
       </div>
       <div class="flex-1 w-full" style={{ minHeight: `${GAP_PX}px` }} />
@@ -65,7 +71,7 @@ export function IconStrip() {
           <IconButton icon={<MoreIcon />} label="More panels" onClick={() => setMoreOpen(!moreOpen)} />
         </span>
       )}
-      <div class="flex flex-col items-center gap-1" data-testid="strip-bottom" {...dropZone('bottom', docks.bottom.panels.length)}>
+      <div class="flex flex-col items-center gap-1" data-testid="strip-bottom" {...dropZone('bottom')}>
         {bottom.map((id) => icon(id, 'bottom'))}
       </div>
       {moreOpen && fit.overflow && (

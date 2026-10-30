@@ -1,5 +1,6 @@
+import { join } from 'node:path';
 import type { TestSet } from '@shared/modules';
-import type { AppPaths } from '../Helpers/AppPaths';
+import { PROJECT_FOLDER } from '@shared/types';
 import { FileStore } from './FileStore';
 
 function isSets(v: unknown): v is TestSet[] {
@@ -8,8 +9,6 @@ function isSets(v: unknown): v is TestSet[] {
 
 export class TestSetStore {
   private readonly stores = new Map<string, FileStore<TestSet[]>>();
-
-  constructor(private readonly paths: AppPaths) {}
 
   list(projectPath: string): Promise<TestSet[]> {
     return this.storeFor(projectPath).read();
@@ -28,11 +27,10 @@ export class TestSetStore {
   }
 
   private storeFor(projectPath: string): FileStore<TestSet[]> {
-    const key = this.paths.projectKey(projectPath);
-    let store = this.stores.get(key);
+    let store = this.stores.get(projectPath);
     if (!store) {
-      store = new FileStore<TestSet[]>(this.paths.file(`test-sets/${key}.json`), [], isSets);
-      this.stores.set(key, store);
+      store = new FileStore<TestSet[]>(join(projectPath, PROJECT_FOLDER, 'test-sets.json'), [], isSets);
+      this.stores.set(projectPath, store);
     }
     return store;
   }

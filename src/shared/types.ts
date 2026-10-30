@@ -331,6 +331,8 @@ export type FileReadResult =
   | { kind: 'binary' }
   | { kind: 'too-large'; bytes: number };
 
+export const PROJECT_FOLDER = '.saturn';
+
 export interface RunEntry {
   id: string;
   name: string;

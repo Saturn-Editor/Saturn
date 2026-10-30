@@ -28,7 +28,7 @@ export function ProjectMenu() {
     if (!open) {
       const usable = (list: { name: string; path: string; missing: boolean }[], kind: Target['kind']) =>
         list.filter((t) => t.path !== ws.projectPath && !t.missing).map((t) => ({ kind, name: t.name, path: t.path }));
-      void window.saturn.projects.recent().then((list) => setProjects(usable(list, 'project')));
+      void window.saturn.projects.recent().then((list) => setProjects(usable(list, 'project').slice(0, 10)));
       void window.saturn.notebooks.list().then((list) => setNotebooks(usable(list, 'notebook')));
     }
     setOpen(!open);

@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import type { RunEntry } from '@shared/types';
+import { join } from 'node:path';
+import { PROJECT_FOLDER, type RunEntry } from '@shared/types';
 import type { AppPaths } from '../Helpers/AppPaths';
 import { FileStore } from './FileStore';
 
-interface RunData {
-  custom: RunEntry[];
+interface RunChoice {
   selected: string | null;
 }
 
@@ -15,19 +15,24 @@ export interface RunProvider {
   provide(projectPath: string): Promise<RunEntry[]>;
 }
 
-function isRunData(v: unknown): v is RunData {
-  const d = v as RunData;
-  return typeof d === 'object' && d !== null && Array.isArray(d.custom) && (d.selected === null || typeof d.selected === 'string');
+function isRunChoice(v: unknown): v is RunChoice {
+  const d = v as RunChoice;
+  return typeof d === 'object' && d !== null && (d.selected === null || typeof d.selected === 'string');
 }
 
-/** Per-project custom run commands and the last selection, kept in app-data. */
+function isEntries(v: unknown): v is RunEntry[] {
+  return Array.isArray(v) && v.every((e) => typeof e?.id === 'string' && typeof e?.name === 'string' && typeof e?.command === 'string');
+}
+
+/** Custom run commands live in the project's .saturn folder (shared); the last selection stays in app-data. */
 export class RunConfigStore {
-  private readonly stores = new Map<string, FileStore<RunData>>();
+  private readonly shared = new Map<string, FileStore<RunEntry[]>>();
+  private readonly choices = new Map<string, FileStore<RunChoice>>();
 
   constructor(private readonly paths: AppPaths) {}
 
   async list(projectPath: string): Promise<RunEntry[]> {
-    return (await this.storeFor(projectPath).read()).custom.map((e) => ({ ...e, group: 'Custom' }));
+    return (await this.sharedFor(projectPath).read()).map((e) => ({ ...e, source: 'custom', group: 'Custom' }));
   }
 
   async addCustom(projectPath: string, input: { name: string; command: string }): Promise<RunEntry> {
@@ -35,31 +40,39 @@ export class RunConfigStore {
     const command = input.command.trim();
     if (!name || !command) throw new Error('Name and command are required');
     const entry: RunEntry = { id: `custom:${randomUUID()}`, name, command, source: 'custom', group: 'Custom' };
-    await this.storeFor(projectPath).update((d) => ({ custom: [...d.custom, entry], selected: entry.id }));
+    await this.sharedFor(projectPath).update((list) => [...list, { id: entry.id, name, command } as RunEntry]);
+    await this.select(projectPath, entry.id);
     return entry;
   }
 
   async removeCustom(projectPath: string, id: string): Promise<void> {
-    await this.storeFor(projectPath).update((d) => ({
-      custom: d.custom.filter((e) => e.id !== id),
-      selected: d.selected === id ? null : d.selected,
-    }));
+    await this.sharedFor(projectPath).update((list) => list.filter((e) => e.id !== id));
+    await this.choiceFor(projectPath).update((d) => ({ selected: d.selected === id ? null : d.selected }));
   }
 
   async selected(projectPath: string): Promise<string | null> {
-    return (await this.storeFor(projectPath).read()).selected;
+    return (await this.choiceFor(projectPath).read()).selected;
   }
 
   async select(projectPath: string, id: string): Promise<void> {
-    await this.storeFor(projectPath).update((d) => ({ ...d, selected: id }));
+    await this.choiceFor(projectPath).update(() => ({ selected: id }));
   }
 
-  private storeFor(projectPath: string): FileStore<RunData> {
-    const key = this.paths.projectKey(projectPath);
-    let store = this.stores.get(key);
+  private sharedFor(projectPath: string): FileStore<RunEntry[]> {
+    let store = this.shared.get(projectPath);
     if (!store) {
-      store = new FileStore<RunData>(this.paths.file(`run/${key}.json`), { custom: [], selected: null }, isRunData);
-      this.stores.set(key, store);
+      store = new FileStore<RunEntry[]>(join(projectPath, PROJECT_FOLDER, 'run-configurations.json'), [], isEntries);
+      this.shared.set(projectPath, store);
+    }
+    return store;
+  }
+
+  private choiceFor(projectPath: string): FileStore<RunChoice> {
+    const key = this.paths.projectKey(projectPath);
+    let store = this.choices.get(key);
+    if (!store) {
+      store = new FileStore<RunChoice>(this.paths.file(`run/${key}.json`), { selected: null }, isRunChoice);
+      this.choices.set(key, store);
     }
     return store;
   }

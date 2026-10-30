@@ -7,8 +7,11 @@ import { editorBehaviour } from '@renderer/editor/codemirrorSetup';
 import { ModuleTreePanel } from '@renderer/panels/builtin/ModuleTreePanel';
 import { WebviewPanel } from '@renderer/panels/builtin/WebviewPanel';
 import type { EditorWorkspace } from '@renderer/screens/editor/EditorWorkspace';
-import { languageServerFeatures, receiveDiagnostics, setShowDiagnostics } from './languageServer';
+import type { EditorView } from '@codemirror/view';
+import { findReferences, languageServerFeatures, receiveDiagnostics, setShowDiagnostics } from './languageServer';
+import { codeLens, inlayHints, semanticHighlighting } from './lspExtras';
 import { clearGrammars, loadGrammar, textMateHighlighting } from './textmate';
+import { docComments } from '@renderer/editor/docComments';
 import { baseName } from '@renderer/helpers';
 
 /** How long typing must pause before a file's new text reaches modules, and a selection change. */
@@ -39,6 +42,34 @@ export function projectBadges(snapshot: ContributionSnapshot, languageIds: strin
     if (language && !looks.some((l) => l.badge === language.badge)) looks.push({ badge: language.badge, icon: language.icon });
   }
   return looks.length ? looks.slice(0, 3) : [{ badge: 'T', icon: null }];
+}
+
+const SHOW_WHEN_DEPTH = 4;
+const SHOW_WHEN_SKIP = new Set(['node_modules', 'bin', 'obj']);
+
+async function projectFileNames(root: string, depth: number): Promise<{ root: string[]; all: string[] }> {
+  const all: string[] = [];
+  let rootNames: string[] = [];
+  let level = [root];
+  for (let d = 0; d <= depth && level.length; d++) {
+    const next: string[] = [];
+    for (const dir of level) {
+      const entries = await window.saturn.fs.readDir(dir).catch(() => []);
+      if (d === 0) rootNames = entries.map((e) => e.name);
+      for (const e of entries) {
+        if (e.kind === 'dir') {
+          if (!e.name.startsWith('.') && !SHOW_WHEN_SKIP.has(e.name)) next.push(e.path);
+        } else all.push(e.name);
+      }
+    }
+    level = next;
+  }
+  return { root: rootNames, all };
+}
+
+function matchesName(name: string, pattern: string): boolean {
+  const regex = pattern.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+  return new RegExp(`^${regex}$`, 'i').test(name);
 }
 
 /**
@@ -97,6 +128,20 @@ export class ModuleBridge {
       void this.ws.terminals.openTerminal({ name, command }).then(() => this.ws.showTerminal());
     });
     api.onMessage((m) => (this.ws.notice.value = { text: m.message, kind: m.kind }));
+    api.onInputRequest((id, options) => {
+      this.ws.inputPrompt.value?.resolve(null);
+      this.ws.inputPrompt.value = { options, resolve: (value) => void api.reply(id, value) };
+    });
+    api.onApplyEditsRequest((id, files) => {
+      this.ws.applyEdits(files).then(() => void api.reply(id, true), (e: Error) => void api.reply(id, null, e.message));
+    });
+    api.onRenameFileRequest((id, path, newName) => {
+      const from = this.absolute(path);
+      window.saturn.fs.rename(from, newName).then((to) => {
+        this.ws.documents.moved(from, to);
+        void api.reply(id, to);
+      }, (e: Error) => void api.reply(id, null, e.message));
+    });
   }
 
   /**
@@ -180,6 +225,21 @@ export class ModuleBridge {
         { completion: this.completion && has('completion'), hover: has('hover'), definition: has('definition'), signatureHelp: has('signatureHelp') },
       ));
     }
+    if (language.hasServer) {
+      const has = (f: LanguageFeature) => language.features.includes(f);
+      const extras = {
+        path,
+        languageId: language.id,
+        findReferences: (view: EditorView, pos: number) => {
+          view.dispatch({ selection: { anchor: pos } });
+          findReferences(view);
+        },
+      };
+      if (has('inlayHints')) extensions.push(inlayHints(extras));
+      if (has('codeLens')) extensions.push(codeLens(extras));
+      if (has('semanticTokens')) extensions.push(semanticHighlighting(extras));
+    }
+    if (language.docCommentTriggers?.length) extensions.push(docComments(path, language.id, language.docCommentTriggers));
     return extensions;
   }
 
@@ -198,16 +258,46 @@ export class ModuleBridge {
         run: () => api.runCommand(cmd.id),
       }));
     }
+    const conditional: { panel: (typeof snapshot.panels)[number]; dispose: (() => void) | null }[] = [];
+    const register = (panel: (typeof snapshot.panels)[number]) => ws.panels.register({
+      id: panel.id,
+      title: panel.title,
+      // A strip button needs something to show, so panels without an icon get "?".
+      icon: panel.iconUrl ? <ModuleIcon icon={panel.iconUrl} badge={panel.title} /> : <QuestionIcon />,
+      defaultDock: panel.dock,
+      source: panel.moduleId,
+      render: () => (panel.kind === 'webview' ? <WebviewPanel panelId={panel.id} /> : <ModuleTreePanel panelId={panel.id} />),
+    });
     for (const panel of snapshot.panels) {
-      this.disposers.push(ws.panels.register({
-        id: panel.id,
-        title: panel.title,
-        // A strip button needs something to show, so panels without an icon get "?".
-        icon: panel.iconUrl ? <ModuleIcon icon={panel.iconUrl} badge={panel.title} /> : <QuestionIcon />,
-        defaultDock: panel.dock,
-        source: panel.moduleId,
-        render: () => (panel.kind === 'webview' ? <WebviewPanel panelId={panel.id} /> : <ModuleTreePanel panelId={panel.id} />),
-      }));
+      if (panel.showWhen?.length) conditional.push({ panel, dispose: null });
+      else this.disposers.push(register(panel));
+    }
+    if (conditional.length) {
+      const deep = conditional.some((c) => c.panel.showWhen!.some((p) => p.startsWith('**/')));
+      const check = async () => {
+        const names = await projectFileNames(ws.projectPath, deep ? SHOW_WHEN_DEPTH : 0);
+        for (const c of conditional) {
+          const show = c.panel.showWhen!.some((p) => (p.startsWith('**/')
+            ? names.all.some((n) => matchesName(n, p.slice(3)))
+            : names.root.some((n) => matchesName(n, p))));
+          if (show && !c.dispose) c.dispose = register(c.panel);
+          else if (!show && c.dispose) {
+            c.dispose();
+            c.dispose = null;
+          }
+        }
+      };
+      void check();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const stop = window.saturn.fs.onChanged((dir) => {
+        if (dir !== ws.projectPath && !(deep && dir.startsWith(ws.projectPath))) return;
+        clearTimeout(timer);
+        timer = setTimeout(() => void check(), 300);
+      });
+      this.disposers.push(() => {
+        stop();
+        conditional.forEach((c) => c.dispose?.());
+      });
     }
     for (const t of snapshot.fileTemplates) {
       const language = snapshot.languages.find((l) => l.moduleId === t.moduleId);
