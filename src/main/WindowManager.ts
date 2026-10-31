@@ -224,6 +224,7 @@ export class WindowManager {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
+        backgroundThrottling: false,
         additionalArguments,
       },
     });

@@ -228,13 +228,13 @@ function AvailableThemes(props: AvailableProps) {
 
 const SECTION_KINDS: Partial<Record<Section, ModuleKind>> = { languages: 'language', extensions: 'extension' };
 
-/** Marketplace window: Themes / Languages / Extensions, each with Available (from the GitHub-hosted lists) and Installed. */
+/** Marketplace window: Languages / Extensions / Themes, each with Available (from the GitHub-hosted lists) and Installed. */
 export function MarketplaceScreen({ embedded = false }: { embedded?: boolean }) {
-  const sections: { id: Section; label: string }[] = [{ id: 'themes', label: 'Themes' }, { id: 'languages', label: 'Languages' }, { id: 'extensions', label: 'Extensions' }];
+  const sections: { id: Section; label: string }[] = [{ id: 'languages', label: 'Languages' }, { id: 'extensions', label: 'Extensions' }, { id: 'themes', label: 'Themes' }];
   const requested = window.saturn.window.section;
-  const initial: Section = requested === 'languages' || requested === 'extensions' ? requested : 'themes';
+  const initial: Section = requested === 'themes' || requested === 'extensions' ? requested : 'languages';
   const [section, setSection] = useState<Section>(initial);
-  const [tab, setTab] = useState<Tab>('installed');
+  const [tab, setTab] = useState<Tab>('available');
   const [error, setError] = useState<string | null>(null);
   // Only the open section's list is fetched; Installed uses it to offer updates.
   const [list, reloadList] = useMarketplaceList(section);
