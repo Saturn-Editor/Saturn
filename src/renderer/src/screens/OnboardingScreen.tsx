@@ -24,14 +24,15 @@ function ModulePicker({ kind, entries, selected, onToggle }: { kind: ModuleKind;
   );
 }
 
-const installable = (entries: MarketplaceEntry[]) => entries.filter((l) => chooseVersion(l).installable);
+const offered = (l: MarketplaceEntry) => !!l.default && !!chooseVersion(l).installable;
+const installable = (entries: MarketplaceEntry[]) => entries.filter(offered);
 
 function useChoices(kind: ModuleKind) {
   const [list, reload] = useMarketplaceList(kind === 'language' ? 'languages' : 'extensions');
   const installed = useInstalledModules(kind);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   useEffect(() => {
-    if (list?.status === 'loaded') setSelected(new Set(installable(list.entries).filter((l) => l.default).map((l) => l.id)));
+    if (list?.status === 'loaded') setSelected(new Set(installable(list.entries).map((l) => l.id)));
   }, [list]);
   const toggle = (id: string, on: boolean) => {
     const next = new Set(selected);
@@ -49,7 +50,7 @@ function ModuleSection({ title, noun, choices }: { title: string; noun: string; 
       <Heading>{title}</Heading>
       <MarketplaceEntries
         state={choices.list}
-        filter={(l) => !!chooseVersion(l).installable}
+        filter={offered}
         hide={(l) => isUpToDate(choices.installed, l)}
         allHidden={`All available ${noun} are already installed.`}
         onRetry={choices.reload}
@@ -101,6 +102,7 @@ export function OnboardingScreen() {
         <ModuleSection title="Languages" noun="languages" choices={languages} />
         <ModuleSection title="Extensions" noun="extensions" choices={extensions} />
         {error && <p class="m-0 text-accent" role="alert">{error}</p>}
+        <p class="m-0 text-muted text-[11px]">More languages and extensions can be installed from the Saturn Marketplace.</p>
       </div>
       <DialogFooter>
         {progress && <span class="mr-auto self-center text-muted">{progress}</span>}
