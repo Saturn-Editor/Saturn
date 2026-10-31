@@ -8,8 +8,6 @@ export interface ManifestLanguage {
   extensions: string[];
   /** Path to a TextMate grammar (JSON), relative to the module folder. */
   grammar?: string;
-  /** TextMate scope name of the grammar, e.g. "text.html.markdown". */
-  scopeName?: string;
   /** The module offers versions (e.g. JDKs) through saturn.languages.registerVersions; clicking the language in the status bar picks one per project. */
   versions?: boolean;
   docCommentTriggers?: string[];
@@ -65,7 +63,7 @@ export function featureKey(feature: LanguageFeature): string {
 }
 
 export interface ManifestLanguageServer {
-  languages: string[];
+  languages?: string[];
   /** "node" means Saturn's bundled runtime; anything else is resolved from PATH. */
   command: string;
   /** "${setting:<id>}" in the command or an argument is replaced by that module setting's value. */
@@ -81,7 +79,7 @@ export interface ManifestLanguageServer {
 export interface ManifestDebugger {
   /** Shown in the Debug panel, e.g. ".NET Core". */
   label: string;
-  languages: string[];
+  languages?: string[];
   /** As for language servers: "node" is Saturn's runtime; "${setting:<id>}" is replaced. */
   command: string;
   args?: string[];
@@ -113,6 +111,7 @@ export interface ManifestPanel {
 export interface ManifestCommand {
   id: string;
   title: string;
+  when?: { projectType?: string; document?: string };
 }
 
 export type ViewMode = 'code' | 'split' | 'preview';
@@ -276,6 +275,8 @@ export const MANIFEST_FILES: Record<ModuleKind, string> = { language: 'saturn-la
 export const ICON_FILES = ['icon.svg', 'icon.png'];
 /** Windows load those pictures as saturn-icon://module/<id> or saturn-icon://theme/<id>. */
 export const ICON_SCHEME = 'saturn-icon';
+export const PAGE_SCHEME = 'saturn-page';
+export const PAGE_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: https:; font-src data:";
 
 /** A button on the editor's right-hand bar (below Settings); clicking it runs the command. */
 export interface ManifestButton {
@@ -300,7 +301,7 @@ interface CodeModuleManifest {
   saturnApi: string;
   /** Entry point (ES module exporting `activate(saturn)`), relative to the module folder. */
   main?: string;
-  activationEvents?: string[];
+  startup?: 'onLaunch' | 'dynamic';
   /** External tools the module needs; checked before its language server starts. */
   requires?: ManifestRequirement[];
 }
@@ -327,8 +328,61 @@ export interface LanguageManifest extends CodeModuleManifest {
 }
 
 /** saturn-extension.json: actions, scripts, panels, buttons and settings, but no languages. */
+
+export interface ManifestProjectType {
+  id: string;
+  name: string;
+  description?: string;
+  icon?: string;
+  marker: string;
+  keep?: KeepPart[];
+  encryption?: boolean;
+}
+
+export type KeepPart = 'run' | 'debug' | 'project' | 'terminal' | 'outline' | 'notices' | 'otherPanels';
+
+export const ALWAYS_PANELS = ['commit', 'git'] as const;
+
+export interface ManifestDocument {
+  id: string;
+  label: string;
+  extensions: string[];
+}
+
 export interface ExtensionManifest extends CodeModuleManifest {
-  contributes?: CommonContributions;
+  contributes?: CommonContributions & {
+    projectTypes?: ManifestProjectType[];
+    documents?: ManifestDocument[];
+  };
+}
+
+export interface SearchResult {
+  id: string;
+  label: string;
+  detail?: string;
+  path?: string;
+}
+
+export function serverLanguages(manifest: { contributes?: { languages?: { id: string }[] } }, server: { languages?: string[] }): string[] {
+  return server.languages ?? (manifest.contributes?.languages ?? []).map((l) => l.id);
+}
+
+export function moduleFilesGlob(extensions: string[]): string | null {
+  const parts = extensions.map((e) => (e.startsWith('.') ? `*${e}` : e)).filter(Boolean);
+  if (!parts.length) return null;
+  return parts.length === 1 ? `**/${parts[0]}` : `**/{${parts.join(',')}}`;
+}
+
+export function pluralName(name: string): string {
+  return /s$/i.test(name) ? name : `${name}s`;
+}
+
+export const documentProvider =(id: string) => `@document:${id}`;
+export const projectTypeProvider = (id: string) => `@projectType:${id}`;
+
+export function documentFor<T extends ManifestDocument>(snapshot: { documents: T[] }, path: string): T | undefined {
+  const lower = path.toLowerCase();
+  return snapshot.documents.find((d) => d.extensions.some((ext) => lower.endsWith(ext.toLowerCase())));
 }
 
 export type ModuleManifest = LanguageManifest | ExtensionManifest;
@@ -371,6 +425,8 @@ export interface ContributionSnapshot {
   buttons: (ManifestButton & { moduleId: string; iconUrl: string | null })[];
   /** Languages that can be debugged, and with which module's debugger. */
   debuggers: { moduleId: string; label: string; languages: string[]; configurations: { id: string; label: string }[]; canAttach: boolean }[];
+  projectTypes: (ManifestProjectType & { moduleId: string; iconUrl: string | null })[];
+  documents: (ManifestDocument & { moduleId: string })[];
 }
 
 export type MessageKind = 'info' | 'warning' | 'error';

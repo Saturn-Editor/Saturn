@@ -86,14 +86,18 @@ export class WindowManager {
     return this.debugWindows.get(resolve(projectPath));
   }
 
-  openEditor(projectPath: string, mode: 'project' | 'notebook' = 'project'): BrowserWindow {
+  openProjectType(projectPath: string, typeId: string): BrowserWindow {
+    return this.openEditor(projectPath, 'projectType', typeId);
+  }
+
+  openEditor(projectPath: string, mode: 'project' | 'notebook' | 'projectType' = 'project', typeId?: string): BrowserWindow {
     const key = resolve(projectPath);
     const existing = this.editors.get(key);
     if (existing && !existing.isDestroyed()) {
       existing.focus();
       return existing;
     }
-    const win = this.create('editor', { project: key, mode });
+    const win = this.create('editor', { project: key, mode, ...(typeId && { type: typeId }) });
     this.editors.set(key, win);
     this.editorOpenedListeners.forEach((l) => l(key));
     win.on('close', (event) => {

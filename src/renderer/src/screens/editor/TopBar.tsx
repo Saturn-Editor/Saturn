@@ -19,14 +19,16 @@ export function TopBar() {
       <div class="flex items-center gap-2 min-w-max flex-1 justify-end">
         {!ws.isNotebook && (
           <>
-            <RunMenu />
-            <IconButton
-              icon={<DebugIcon />}
-              label={ws.debug.state.value.state === 'stopped' ? 'Continue' : 'Debug the open file'}
-              active={ws.debug.state.value.state !== 'idle'}
-              data-testid="debug-button"
-              onClick={() => void ws.startDebugging()}
-            />
+            {ws.keeps('run') && <RunMenu />}
+            {ws.keeps('debug') && (
+              <IconButton
+                icon={<DebugIcon />}
+                label={ws.debug.state.value.state === 'stopped' ? 'Continue' : 'Debug the open file'}
+                active={ws.debug.state.value.state !== 'idle'}
+                data-testid="debug-button"
+                onClick={() => void ws.startDebugging()}
+              />
+            )}
           </>
         )}
         <NotificationsMenu />

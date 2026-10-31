@@ -2,11 +2,12 @@ import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, nativeTheme, net, protocol } from 'electron';
+import { randomUUID } from 'node:crypto';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, type OpenDialogOptions } from 'electron';
 import { channel } from '@shared/api';
-import { ICON_FILE_NAME, ICON_FILES, ICON_SCHEME } from '@shared/modules';
+import { ICON_FILE_NAME, ICON_FILES, ICON_SCHEME, PAGE_CSP, PAGE_SCHEME } from '@shared/modules';
 import { spawn } from 'node-pty';
-import { AppPaths, SATURN_DATA } from './Helpers/AppPaths';
+import { AppPaths, SATURN_DATA, saturnProjectsDir } from './Helpers/AppPaths';
 import { setUpAppMenu } from './Helpers/appMenu';
 import { adoptLoginShellPath } from './Helpers/loginShellPath';
 import { IpcRouter } from './IpcRouter';
@@ -37,6 +38,8 @@ import { NotebookCrypto } from './Notebooks/NotebookCrypto';
 import { NotebookIpc } from './Notebooks/NotebookIpc';
 import { NotebookStore } from './Notebooks/NotebookStore';
 import { FileStore } from './Store/FileStore';
+import { ProjectTypeStore } from './Store/ProjectTypeStore';
+import { SandboxService } from './Services/SandboxService';
 
 const nodePtyFactory: PtyFactory = (shell, args, opts) => {
   const pty = spawn(shell, args, { name: 'xterm-256color', ...opts });
@@ -55,6 +58,10 @@ const nodePtyFactory: PtyFactory = (shell, args, opts) => {
 /** How often installed languages, extensions and themes are checked for updates. */
 const MARKETPLACE_CHECK_MS = 6 * 60 * 60 * 1000;
 
+function openOptions(projectPath: string, options: { title?: string; filters?: { name: string; extensions: string[] }[]; multiple?: boolean }): OpenDialogOptions {
+  return { title: options.title, defaultPath: projectPath, filters: options.filters, properties: options.multiple ? ['openFile', 'multiSelections'] : ['openFile'] };
+}
+
 export class SaturnApp {
   constructor() {
     // Names the app in menus ("Quit Saturn"). In development macOS still shows "Electron" as the bold
@@ -65,7 +72,27 @@ export class SaturnApp {
     // Before anything spawns tools (language servers, git, terminals) that must be found on PATH.
     if (app.isPackaged) adoptLoginShellPath();
     // Installed languages', extensions' and themes' icon.svg / icon.png, served to windows (see serveIcons).
-    protocol.registerSchemesAsPrivileged([{ scheme: ICON_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
+    protocol.registerSchemesAsPrivileged([
+      { scheme: ICON_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } },
+      { scheme: PAGE_SCHEME, privileges: { standard: true, secure: true } },
+    ]);
+  }
+
+  private readonly pages = new Map<string, string>();
+
+  private servePages(): void {
+    protocol.handle(PAGE_SCHEME, (request) => {
+      const token = new URL(request.url).pathname.slice(1);
+      const html = this.pages.get(token);
+      if (!html) return new Response(null, { status: 404 });
+      return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': PAGE_CSP } });
+    });
+    ipcMain.handle(channel('pages', 'register'), (_e, html: string) => {
+      const token = randomUUID();
+      this.pages.set(token, String(html));
+      return `${PAGE_SCHEME}://page/${token}`;
+    });
+    ipcMain.handle(channel('pages', 'release'), (_e, url: string) => void this.pages.delete(new URL(String(url)).pathname.slice(1)));
   }
 
   /**
@@ -108,12 +135,18 @@ export class SaturnApp {
       paths.dir('module-storage'),
     );
     this.serveIcons(modules, paths.dir('themes'));
+    this.servePages();
     const notebookKeys = new NotebookCrypto(new FileStore<Record<string, string>>(
       paths.file('notebook-keys.json'),
       {},
       (v): v is Record<string, string> => typeof v === 'object' && v !== null && Object.values(v).every((s) => typeof s === 'string'),
     ));
-    new NotebookIpc(new NotebookStore(paths.file('notebooks.json'), paths.file('notebook-settings.json'), paths.dir('notebooks')), windows, notebookKeys).register();
+    new NotebookIpc(new NotebookStore(paths.file('notebooks.json'), paths.file('notebook-settings.json'), saturnProjectsDir('Notebooks')), windows, notebookKeys).register();
+    const sandbox = new SandboxService();
+    const projectCrypto = notebookKeys.forProjectType(
+      (projectPath, state) => host.encryptionChanged(projectPath, state),
+      (projectPath) => host.encryptionWillRemove(projectPath),
+    );
     let router: IpcRouter | null = null;
     // Set once everything it needs exists (below).
     let resetSaturn: () => Promise<void> = async () => undefined;
@@ -195,13 +228,29 @@ export class SaturnApp {
         : router?.broadcast('modules', 'webviewPost', panelId, message)),
       webviewRefresh: (panelId) => router?.broadcast('modules', 'webviewRefresh', panelId),
       showInput: async (projectPath, options) => (router ? router.requestFromProject<string | null>(projectPath, 'inputRequest', options) : null),
+      documentSetText: (path, text) => router?.broadcast('documents', 'setText', path, text),
+      documentPost: (path, message) => router?.broadcast('documents', 'post', path, message),
+      showOpenDialog: async (projectPath, options) => {
+        const win = windows.editorFor(projectPath);
+        const picked = await (win ? dialog.showOpenDialog(win, openOptions(projectPath, options)) : dialog.showOpenDialog(openOptions(projectPath, options)));
+        return picked.canceled ? null : picked.filePaths;
+      },
+      showSaveDialog: async (projectPath, options) => {
+        const win = windows.editorFor(projectPath);
+        const opts = { title: options.title, defaultPath: join(projectPath, options.defaultName ?? ''), filters: options.filters };
+        const picked = await (win ? dialog.showSaveDialog(win, opts) : dialog.showSaveDialog(opts));
+        return picked.canceled || !picked.filePath ? null : picked.filePath;
+      },
+      encryptionState: (projectPath) => projectCrypto.state(projectPath),
+      encryptText: (projectPath, text) => projectCrypto.encryptText(projectPath, text),
+      decryptText: (projectPath, text) => projectCrypto.decryptText(projectPath, text),
+      sandboxRun: (code, timeout) => sandbox.run(code, timeout),
       renameFile: async (projectPath, path, newName) => {
         if (!router) throw new Error('Saturn is not ready');
         return router.requestFromProject<string>(projectPath, 'renameFileRequest', path, newName);
       },
     });
     // Closing a project's window: modules release what they hold for it, and its language servers stop.
-    windows.onEditorOpened((projectPath) => host.projectOpened(projectPath));
     windows.onEditorClosed((projectPath) => {
       host.projectClosed(projectPath);
       languageServers.stopProject(projectPath);
@@ -219,6 +268,8 @@ export class SaturnApp {
       terminals,
       runs: new RunConfigStore(paths),
       testSets: new TestSetStore(),
+      projectTypes: new ProjectTypeStore(paths.file('project-types.json')),
+      projectCrypto,
       modules,
       host,
       languageServers,

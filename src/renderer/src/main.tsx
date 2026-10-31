@@ -9,6 +9,7 @@ import { WelcomeScreen } from './screens/WelcomeScreen';
 import { CredentialPrompt } from './screens/CredentialPrompt';
 import { ThemeApplier } from './theme/ThemeApplier';
 import { followKeymap } from './commands/keymap';
+import { focusedFrame, sendEdit } from './modules/ExtensionFrame';
 import './styles.css';
 
 // Each window shows its screen with no props (Settings and Marketplace default to their own-window layout).
@@ -26,4 +27,10 @@ await new ThemeApplier().follow();
 await followKeymap();
 const Screen = screens[window.saturn.window.kind];
 // Any window can be asked for Git credentials (a clone from Welcome, a push from an editor).
+window.saturn.window.onEdit((kind) => {
+  const frame = focusedFrame();
+  if (frame) sendEdit(frame, kind);
+  else document.execCommand(kind);
+});
+
 render(<><Screen /><CredentialPrompt /></>, document.getElementById('app')!);

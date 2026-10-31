@@ -77,7 +77,7 @@ export function NotificationsMenu() {
             <span class={`flex-1 font-semibold ${shownToast.kind === 'info' ? 'text-strong' : 'text-accent'}`}>{shownToast.title}</span>
             <IconButton icon={<CloseIcon class="size-3" />} label="Hide" class="size-5" onClick={() => setToast(null)} />
           </div>
-          {shownToast.message && <p class="m-0 mt-1 text-text break-words">{shownToast.message}</p>}
+          {shownToast.message && <p class="m-0 mt-1 text-text break-words whitespace-pre-line">{shownToast.message}</p>}
           {shownToast.actions.length > 0 && (
             <div class="flex flex-wrap gap-2 mt-2">
               {shownToast.actions.map((a, i) => <Button key={a.label} onClick={() => {
@@ -102,7 +102,7 @@ export function NotificationsMenu() {
                   <span class={`flex-1 font-semibold ${n.kind === 'info' ? 'text-strong' : 'text-accent'}`}>{n.title}</span>
                   <IconButton icon={<CloseIcon class="size-3" />} label="Dismiss" class="size-5" onClick={() => void window.saturn.notifications.dismiss(n.id)} />
                 </div>
-                {n.message && <p class="m-0 mt-1 text-text select-text break-words">{n.message}</p>}
+                {n.message && <p class="m-0 mt-1 text-text select-text break-words whitespace-pre-line">{n.message}</p>}
                 {n.actions.length > 0 && (
                   <div class="flex flex-wrap gap-2 mt-2">
                     {n.actions.map((a, i) => <Button key={a.label} onClick={() => act(n, i)}>{a.label}</Button>)}

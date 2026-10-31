@@ -14,6 +14,8 @@ import type { InfoDoc } from '@renderer/editor/EditorDocuments';
 import { DiffView } from './DiffView';
 import { MergeEditor } from './MergeEditor';
 import { PageView } from '@renderer/notebooks/PageView';
+import { DocumentView } from '@renderer/editor/DocumentView';
+import { documentFor } from '@shared/modules';
 import { UnlockNotebook } from '@renderer/notebooks/NotebookLock';
 import { useWorkspace } from './EditorWorkspace';
 import { blameShown, toggleBlame } from '@renderer/editor/blame';
@@ -344,7 +346,8 @@ function EditorPane({ group }: { group: number }) {
   ];
 
   ws.previews.changed.value; // re-render when languages add or remove previews
-  const provider = activeDoc ? ws.previews.for(activeDoc.path) : undefined;
+  const docType = activeDoc && !activeDoc.asText ? documentFor(ws.modules.snapshot.value, activeDoc.path) : undefined;
+  const provider = activeDoc && !docType ? ws.previews.for(activeDoc.path) : undefined;
   // The view picked for this tab, else the user's default for its file type, else the language's.
   const mode: ViewMode = provider && activeDoc ? (modes[activeDoc.path] ?? ws.defaultViews.value[provider.id] ?? provider.defaultView ?? 'code') : 'code';
   const setMode = (m: ViewMode) => activeDoc && setModes({ ...modes, [activeDoc.path]: m });
@@ -396,7 +399,7 @@ function EditorPane({ group }: { group: number }) {
       )}
       <div class="relative flex-1 min-h-0 flex">
         <div
-          class={`relative min-w-0 ${activeDoc && mode !== 'preview' ? 'flex-1' : 'hidden'}`}
+          class={`relative min-w-0 ${activeDoc && !docType && mode !== 'preview' ? 'flex-1' : 'hidden'}`}
           onContextMenu={(e) => {
             const v = view.current;
             if (!v) return;
@@ -432,6 +435,7 @@ function EditorPane({ group }: { group: number }) {
             />
           );
         })()}
+        {docType && activeDoc && <DocumentView key={activeDoc.path} path={activeDoc.path} documentId={docType.id} text={activeDoc.text} />}
         {provider && activeDoc && mode !== 'code' && (
           <div class={`flex-1 min-w-0 ${mode === 'split' ? 'border-l border-divider' : ''}`}>
             <PreviewPane provider={provider} text={activeDoc.text} path={activeDoc.path} projectPath={ws.projectPath} />
@@ -442,7 +446,7 @@ function EditorPane({ group }: { group: number }) {
           <div class="flex-1 min-w-0"><PreviewPane provider={infoProvider} text="" path={activeInfo.path} projectPath={ws.projectPath} refresh={documents.diskVersion.value} /></div>
         ) : <div class="flex-1 min-w-0"><InfoView info={activeInfo} /></div>)}
         {!activeDoc && !activeInfo && (
-          <div class="flex-1 flex items-center justify-center text-muted">Open a file from the Project panel.</div>
+          <div class="flex-1 flex items-center justify-center text-muted">{ws.isProjectType ? 'Open a document from the Project panel.' : 'Open a file from the Project panel.'}</div>
         )}
       </div>
     </div>

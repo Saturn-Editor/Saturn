@@ -1,12 +1,13 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { argon2id } from 'hash-wasm';
-import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { safeStorage } from 'electron';
 import {
   NOTEBOOK_FILE, NOTEBOOK_VERSION, PAGE_EXTENSION, PAGE_LINK, emptyPage, isPageFile, newPageId,
-  type EncryptedPageFile, type NotebookEncryption, type NotebookKdf, type NotebookLock, type NotebookMeta, type PageFile, type Sealed,
+  type EncryptedPageFile, type NotebookEncryption, type NotebookKdf, type NotebookLock, type PageFile, type Sealed,
 } from '@shared/notebooks';
+import { PROJECT_FOLDER } from '@shared/types';
 import type { FileStore } from '../Store/FileStore';
 import { readNotebookMeta } from './Notebook';
 
@@ -67,25 +68,59 @@ async function pagesIn(dir: string): Promise<string[]> {
   return found;
 }
 
+export interface KeySource {
+  read(root: string): Promise<NotebookEncryption | undefined>;
+  write(root: string, encryption: NotebookEncryption | undefined): Promise<void>;
+}
+
+const notebookSource: KeySource = {
+  read: async (root) => (await readNotebookMeta(root)).encryption,
+  write: async (root, encryption) => {
+    const { encryption: _, ...meta } = await readNotebookMeta(root);
+    await writeFile(join(root, NOTEBOOK_FILE), JSON.stringify(encryption ? { ...meta, encryption } : meta, null, 2));
+  },
+};
+
+const projectSource: KeySource = {
+  read: async (root) => {
+    const text = await readFile(join(root, PROJECT_FOLDER, 'encryption.json'), 'utf8').catch(() => null);
+    return text ? (JSON.parse(text) as NotebookEncryption) : undefined;
+  },
+  write: async (root, encryption) => {
+    const file = join(root, PROJECT_FOLDER, 'encryption.json');
+    if (!encryption) return void (await rm(file, { force: true }));
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify(encryption, null, 2));
+  },
+};
+
 export class NotebookCrypto {
   private readonly keys = new Map<string, Buffer>();
 
-  constructor(private readonly remembered: FileStore<Record<string, string>>) {}
+  constructor(
+    private readonly remembered: FileStore<Record<string, string>>,
+    private readonly source: KeySource = notebookSource,
+    private readonly onChange: (root: string, state: NotebookLock) => void = () => undefined,
+    private readonly beforeRemove: (root: string) => Promise<void> = async () => undefined,
+  ) {}
+
+  forProjectType(onChange: (root: string, state: NotebookLock) => void, beforeRemove: (root: string) => Promise<void>): NotebookCrypto {
+    return new NotebookCrypto(this.remembered, projectSource, onChange, beforeRemove);
+  }
 
   async state(root: string): Promise<NotebookLock> {
-    const meta = await readNotebookMeta(root);
-    if (!meta.encryption) return 'none';
+    if (!(await this.source.read(root))) return 'none';
     if (this.keys.has(root)) return 'unlocked';
     return (await this.recall(root)) ? 'unlocked' : 'locked';
   }
 
   async unlock(root: string, password: string, remember: boolean): Promise<void> {
-    const meta = await readNotebookMeta(root);
-    if (!meta.encryption) return;
-    const kek = await deriveKey(password, meta.encryption);
+    const encryption = await this.source.read(root);
+    if (!encryption) return;
+    const kek = await deriveKey(password, encryption);
     let key: Buffer;
     try {
-      key = open(kek, meta.encryption.key, 'notebook-key');
+      key = open(kek, encryption.key, 'notebook-key');
     } catch {
       throw new Error('Wrong password');
     } finally {
@@ -93,62 +128,93 @@ export class NotebookCrypto {
     }
     this.keys.set(root, key);
     if (remember) await this.remember(root, key);
+    this.onChange(root, 'unlocked');
   }
 
   async lock(root: string): Promise<void> {
     this.keys.get(root)?.fill(0);
     this.keys.delete(root);
     await this.forget(root);
+    this.onChange(root, (await this.source.read(root)) ? 'locked' : 'none');
   }
 
   async enable(root: string, password: string, remember: boolean): Promise<void> {
     if (password.length < MIN_PASSWORD) throw new Error(`Use at least ${MIN_PASSWORD} characters`);
-    const meta = await readNotebookMeta(root);
-    if (meta.encryption) throw new Error('This notebook is already encrypted');
+    if (await this.source.read(root)) throw new Error('This notebook is already encrypted');
     const key = randomBytes(32);
     const encryption = await this.wrap(key, password);
     for (const path of await pagesIn(root)) {
       await writeFile(path, this.encode(this.decode(await readFile(path, 'utf8'), null), key));
     }
-    await this.writeMeta(root, { ...meta, encryption });
+    await this.source.write(root, encryption);
     this.keys.set(root, key);
     if (remember) await this.remember(root, key);
   }
 
   async disable(root: string, password: string): Promise<void> {
-    const meta = await readNotebookMeta(root);
-    if (!meta.encryption) return;
+    if (!(await this.source.read(root))) return;
     await this.unlock(root, password, false);
     const key = this.keys.get(root);
     if (!key) throw new Error('Wrong password');
     for (const path of await pagesIn(root)) {
       await writeFile(path, JSON.stringify(this.decode(await readFile(path, 'utf8'), key)));
     }
-    const { encryption: _, ...plain } = meta;
-    await this.writeMeta(root, plain);
+    await this.source.write(root, undefined);
     await this.lock(root);
+  }
+
+  async enableKeyOnly(root: string, password: string, remember: boolean): Promise<void> {
+    if (password.length < MIN_PASSWORD) throw new Error(`Use at least ${MIN_PASSWORD} characters`);
+    if (await this.source.read(root)) throw new Error('This project is already encrypted');
+    const key = randomBytes(32);
+    await this.source.write(root, await this.wrap(key, password));
+    this.keys.set(root, key);
+    if (remember) await this.remember(root, key);
+    this.onChange(root, 'unlocked');
+  }
+
+  async disableKeyOnly(root: string, password: string): Promise<void> {
+    if (!(await this.source.read(root))) return;
+    await this.unlock(root, password, false);
+    await this.beforeRemove(root);
+    await this.source.write(root, undefined);
+    await this.lock(root);
+  }
+
+  async encryptText(root: string, text: string): Promise<string> {
+    const key = await this.projectKey(root);
+    return JSON.stringify(seal(key, Buffer.from(text, 'utf8'), 'value'));
+  }
+
+  async decryptText(root: string, text: string): Promise<string> {
+    const key = await this.projectKey(root);
+    return open(key, JSON.parse(text) as Sealed, 'value').toString('utf8');
   }
 
   async changePassword(root: string, current: string, next: string): Promise<void> {
     if (next.length < MIN_PASSWORD) throw new Error(`Use at least ${MIN_PASSWORD} characters`);
     await this.unlock(root, current, false);
-    const meta = await readNotebookMeta(root);
-    await this.writeMeta(root, { ...meta, encryption: await this.wrap(this.keys.get(root)!, next) });
+    await this.source.write(root, await this.wrap(this.keys.get(root)!, next));
   }
 
   async readPage(root: string, path: string): Promise<PageFile> {
     const full = this.inside(root, path);
-    const meta = await readNotebookMeta(root);
-    const key = meta.encryption ? await this.keyFor(root) : null;
+    const key = (await this.source.read(root)) ? await this.keyFor(root) : null;
     return this.decode(await readFile(full, 'utf8'), key);
   }
 
   async writePage(root: string, path: string, page: PageFile): Promise<void> {
     const full = this.inside(root, path);
     if (!isPageFile(page)) throw new Error("That isn't a Saturn notebook page");
-    const meta = await readNotebookMeta(root);
-    const key = meta.encryption ? await this.keyFor(root) : null;
+    const key = (await this.source.read(root)) ? await this.keyFor(root) : null;
     await writeFile(full, key ? this.encode(page, key) : JSON.stringify(page));
+  }
+
+  private async projectKey(root: string): Promise<Buffer> {
+    if (!(await this.source.read(root))) throw new Error("This project isn't encrypted");
+    const key = this.keys.get(root) ?? await this.recall(root);
+    if (!key) throw new Error('This project is locked');
+    return key;
   }
 
   async titles(root: string): Promise<Record<string, string>> {
@@ -253,10 +319,6 @@ export class NotebookCrypto {
     const full = resolve(root, path);
     if (!full.startsWith(resolve(root) + sep) || !full.toLowerCase().endsWith(PAGE_EXTENSION)) throw new Error('That page is outside this notebook');
     return full;
-  }
-
-  private async writeMeta(root: string, meta: NotebookMeta): Promise<void> {
-    await writeFile(join(root, NOTEBOOK_FILE), JSON.stringify(meta, null, 2));
   }
 
   private async remember(root: string, key: Buffer): Promise<void> {

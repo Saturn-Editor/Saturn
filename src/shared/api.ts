@@ -1,10 +1,10 @@
 import type {
   AppFolder, AppInfo, AppSettings, BlameLine, Breakpoint, ConflictVersions, RebaseStep, DebugState, DebugVariable, DirEntry, GitCommit, GitRemote, GitStash, GitStatus, GitTag, WorkingDiff, UpdateStatus, FileReadResult, LayoutState, NewProjectRequest, RecentProject,
-  RunEntry, Theme, ThemeMode, ThemeSummary, Unsubscribe, WindowKind,
+  RecentTypedProject, RunEntry, Theme, ThemeMode, ThemeSummary, Unsubscribe, WindowKind,
 } from './types';
 import type { NotebookFolder, NotebookLock, NotebookSummary, PageFile, PageStyle } from './notebooks';
 import type {
-  AppNotification, CompletionItem, CompletionRequest, ContributionSnapshot, Diagnostic, DocumentRequest, EditorEvent, DocumentSymbol, FileEdits, ModuleMessage, InputOptions, CodeAction, CodeActionRequest, CodeLensItem, InlayHint, SemanticToken, SymbolRename, DocCommentRequest,
+  AppNotification, CompletionItem, CompletionRequest, ContributionSnapshot, Diagnostic, DocumentRequest, EditorEvent, DocumentSymbol, FileEdits, ModuleMessage, InputOptions, SearchResult, CodeAction, CodeActionRequest, CodeLensItem, InlayHint, SemanticToken, SymbolRename, DocCommentRequest,
   ModuleSummary, ReferenceLocation, SettingValue, SettingValues, SignatureHelp, SourceLocation, TextEdit, TreeItem,
 } from './modules';
 import type { LanguageVersion, LanguageVersionChoices, TestEvent, TestGroup, TestSet } from './modules';
@@ -29,13 +29,15 @@ export interface SaturnApi {
   window: {
     kind: WindowKind;
     projectPath: string | null;
-    mode: 'project' | 'notebook' | 'debug';
+    mode: 'project' | 'notebook' | 'debug' | 'projectType';
+    projectType: string | null;
     /** Which section a Settings or Marketplace window should open on, if given. */
     section: string | null;
     setDirty(dirty: boolean): void;
     close(): void;
     /** Main asks the editor to save everything before closing (from the unsaved-changes prompt). */
     onSaveAll(cb: () => void): Unsubscribe;
+    onEdit(cb: (kind: 'undo' | 'redo') => void): Unsubscribe;
   };
   windows: {
     /** Opens Settings, optionally on a section ("appearance", or a module's tab as "module:<id>"). */
@@ -95,7 +97,7 @@ export interface SaturnApi {
     onSettingsChanged(cb: (moduleId: string, values: SettingValues) => void): Unsubscribe;
     snapshot(): Promise<ContributionSnapshot>;
     onChanged(cb: (snapshot: ContributionSnapshot) => void): Unsubscribe;
-    runCommand(id: string): Promise<void>;
+    runCommand(id: string, path?: string): Promise<void>;
     treeChildren(panelId: string, parentId: string | null): Promise<TreeItem[]>;
     /** Runs one of a tree item's right-click actions in its module. */
     treeAction(panelId: string, actionId: string, item: TreeItem): Promise<void>;
@@ -118,6 +120,7 @@ export interface SaturnApi {
     reportEditor(event: EditorEvent): void;
     /** Messages from modules (and extension host problems) for the status bar. */
     onMessage(cb: (message: ModuleMessage) => void): Unsubscribe;
+    windowReady(): Promise<void>;
     onInputRequest(cb: (id: number, options: InputOptions) => void): Unsubscribe;
     onRenameFileRequest(cb: (id: number, path: string, newName: string) => void): Unsubscribe;
     onApplyEditsRequest(cb: (id: number, files: FileEdits[]) => void): Unsubscribe;
@@ -316,6 +319,39 @@ export interface SaturnApi {
     saveSet(set: TestSet): Promise<TestSet[]>;
     removeSet(name: string): Promise<TestSet[]>;
     onEvent(cb: (event: TestEvent) => void): Unsubscribe;
+  };
+  projectTypes: {
+    recent(typeId: string): Promise<RecentTypedProject[]>;
+    remove(typeId: string, path: string): Promise<void>;
+    open(typeId: string, path: string): Promise<void>;
+    openDialog(typeId: string): Promise<boolean>;
+    create(typeId: string, name: string): Promise<string>;
+    lockState(): Promise<NotebookLock>;
+    unlock(password: string, remember: boolean): Promise<void>;
+    lock(): Promise<void>;
+    encrypt(password: string, remember: boolean): Promise<void>;
+    decrypt(password: string): Promise<void>;
+    changePassword(current: string, next: string): Promise<void>;
+  };
+  documents: {
+    html(id: string, path: string, text: string): Promise<string>;
+    message(id: string, path: string, message: unknown): Promise<void>;
+    projectImage(relativePath: string): Promise<string>;
+    onSetText(cb: (path: string, text: string) => void): Unsubscribe;
+    onPost(cb: (path: string, message: unknown) => void): Unsubscribe;
+  };
+  search: {
+    query(query: string): Promise<(SearchResult & { moduleId: string })[]>;
+    open(moduleId: string, id: string): Promise<void>;
+  };
+  pages: {
+    register(html: string): Promise<string>;
+    release(url: string): Promise<void>;
+  };
+  clipboard: {
+    readText(): Promise<string>;
+    writeText(text: string): Promise<void>;
+    writeImage(dataUrl: string): Promise<void>;
   };
   notebooks: {
     list(): Promise<NotebookSummary[]>;

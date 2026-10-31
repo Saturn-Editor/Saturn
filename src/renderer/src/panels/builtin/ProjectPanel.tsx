@@ -183,6 +183,7 @@ export function ProjectPanel() {
     const pages = new Set(entries.filter((e) => isPagePath(e.path)).map((e) => pageId(e.path).toLowerCase()));
     for (const entry of entries) {
       if (ws.isNotebook && dir === root && entry.name === NOTEBOOK_FILE) continue;
+      if (ws.projectType && dir === root && entry.name === ws.projectType.marker) continue;
       if (ws.isNotebook && entry.kind === 'dir' && pages.has(entry.name.toLowerCase())) continue;
       const subpages = ws.isNotebook && isPagePath(entry.path) ? folders.get(pageId(entry.path).toLowerCase()) : undefined;
       rows.push({ entry, depth, subpages });

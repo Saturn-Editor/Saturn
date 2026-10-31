@@ -2,7 +2,9 @@ import CodeBlock from '@tiptap/extension-code-block';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { Node as PmNode } from '@tiptap/pm/model';
+import type { Editor } from '@tiptap/core';
 import { highlightText } from '@renderer/modules/textmate';
+import { editorBehaviour } from '@renderer/editor/codemirrorSetup';
 
 export interface CodeLanguage {
   id: string;
@@ -38,7 +40,53 @@ function decorate(doc: PmNode): { set: DecorationSet; missing: { language: strin
   return { set: DecorationSet.create(doc, decorations), missing };
 }
 
+function indentUnit(): string {
+  return editorBehaviour.indentWith === 'tab' ? '\t' : ' '.repeat(editorBehaviour.indentSize);
+}
+
+function shiftLines(editor: Editor, outdent: boolean): boolean {
+  const { state } = editor;
+  const { $from, from, to, empty } = state.selection;
+  if ($from.parent.type.name !== 'codeBlock') return false;
+  const unit = indentUnit();
+  if (!outdent && empty) {
+    editor.view.dispatch(state.tr.insertText(unit, from, to));
+    return true;
+  }
+  const start = $from.start();
+  const text = $from.parent.textContent;
+  const selFrom = from - start;
+  const selTo = Math.min(to, $from.end()) - start;
+  const lineStarts: number[] = [];
+  let lineStart = 0;
+  for (const line of text.split('\n')) {
+    const lineEnd = lineStart + line.length;
+    if (lineEnd >= selFrom && lineStart <= selTo) lineStarts.push(start + lineStart);
+    lineStart = lineEnd + 1;
+  }
+  const tr = state.tr;
+  for (const at of lineStarts.reverse()) {
+    if (!outdent) {
+      tr.insertText(unit, at);
+      continue;
+    }
+    const line = text.slice(at - start);
+    const remove = line.startsWith('\t') ? 1 : Math.min(unit === '\t' ? editorBehaviour.indentSize : unit.length, line.length - line.trimStart().length);
+    if (remove > 0) tr.delete(at, at + remove);
+  }
+  editor.view.dispatch(tr);
+  return true;
+}
+
 export const NotebookCodeBlock = CodeBlock.extend({
+  addKeyboardShortcuts() {
+    return {
+      ...this.parent?.(),
+      Tab: ({ editor }) => shiftLines(editor, false),
+      'Shift-Tab': ({ editor }) => shiftLines(editor, true),
+    };
+  },
+
   addNodeView() {
     return ({ node, editor, getPos }) => {
       const wrapper = document.createElement('div');

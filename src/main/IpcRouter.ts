@@ -1,12 +1,13 @@
-import { mkdir, rm, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
-import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron';
+import { basename, extname, join, resolve, sep } from 'node:path';
+import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, nativeImage, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { channel } from '@shared/api';
 import type { MarketplaceKind } from '@shared/marketplace';
-import { MANIFEST_FILES, SATURN_API_VERSION, type CodeActionRequest, type CompletionRequest, type DocCommentRequest, type DocumentRequest, type EditorEvent, type SymbolRename, type LanguageVersion, type SettingValue, type TestSet, type TreeItem } from '@shared/modules';
+import { documentFor, pluralName, MANIFEST_FILES, SATURN_API_VERSION, type CodeActionRequest, type CompletionRequest, type DocCommentRequest, type DocumentRequest, type EditorEvent, type SymbolRename, type LanguageVersion, type SettingValue, type TestSet, type TreeItem } from '@shared/modules';
 import type { AppFolder, AppInfo, AppSettings, Breakpoint, LayoutState, NewProjectRequest, RebaseStep, RunEntry, ThemeMode } from '@shared/types';
-import type { AppPaths } from './Helpers/AppPaths';
+import { saturnProjectsDir, type AppPaths } from './Helpers/AppPaths';
 import type { ExtensionHostService } from './Services/ExtensionHostService';
 import { FileService } from './Services/FileService';
 import { GitService } from './Services/GitService';
@@ -28,6 +29,13 @@ import type { RunConfigStore } from './Store/RunConfigStore';
 import type { TestSetStore } from './Store/TestSetStore';
 import type { SettingsStore } from './Store/SettingsStore';
 import type { WindowManager } from './WindowManager';
+import type { ProjectTypeStore } from './Store/ProjectTypeStore';
+import type { NotebookCrypto } from './Notebooks/NotebookCrypto';
+
+const IMAGE_TYPES: Record<string, string> = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
+};
+const MAX_PAGE_IMAGE_BYTES = 5 * 1024 * 1024;
 
 export interface SaturnServices {
   windows: WindowManager;
@@ -50,6 +58,8 @@ export interface SaturnServices {
   askpass: AskpassService;
   trash: TrashService;
   languageVersions: LanguageVersionStore;
+  projectTypes: ProjectTypeStore;
+  projectCrypto: NotebookCrypto;
   /** Wipes Saturn's data and starts over as on a first launch (Settings → Reset Saturn, after confirming). */
   reset: () => Promise<void>;
 }
@@ -79,6 +89,7 @@ export class IpcRouter {
     this.registerNotifications();
     this.registerUpdates();
     this.registerDebug();
+    this.registerProjectTypes();
   }
 
   private registerDebug(): void {
@@ -365,7 +376,7 @@ export class IpcRouter {
     this.handle('modules', 'setEnabled', (_e, id: string, enabled: boolean) => modules.setEnabled(id, enabled));
     this.handle('modules', 'settings', (_e, moduleId: string) => modules.settings(moduleId));
     this.handle('modules', 'setSetting', (_e, moduleId: string, id: string, value: SettingValue) => modules.setSetting(moduleId, id, value));
-    this.handle('modules', 'runCommand', (e, id: string) => host.runCommand(id, ctx(e)));
+    this.handle('modules', 'runCommand', (e, id: string, path?: string) => host.runCommand(id, { ...ctx(e), ...(path && { path }) }));
     this.handle('modules', 'treeChildren', (e, panelId: string, parentId: string | null) => host.treeChildren(panelId, parentId, ctx(e)));
     this.handle('modules', 'treeAction', (e, panelId: string, actionId: string, item: TreeItem) => host.treeAction(panelId, actionId, item, ctx(e)));
     this.handle('tests', 'discover', (e) => host.testsDiscover(ctx(e)));
@@ -381,6 +392,7 @@ export class IpcRouter {
     });
     this.handle('tests', 'run', (e, controllerId: string, ids: string[] | null, runId: string, coverage?: boolean) => host.testsRun(controllerId, ids, runId, ctx(e), !!coverage));
     this.handle('modules', 'renderPreview', (e, id: string, text: string, path: string) => host.renderPreview(id, text, { ...ctx(e), path }));
+    this.handle('modules', 'windowReady', (e) => host.projectOpened(this.projectOf(e)));
     this.handle('modules', 'reply', (_e, id: number, value: unknown, error?: string) => {
       const pending = this.replies.get(id);
       if (error) pending?.reject(new Error(error));
@@ -509,12 +521,103 @@ export class IpcRouter {
       const path = await GitService.clone(url, parentDir);
       await openProject(path);
     });
-    this.handle('projects', 'defaultParentDir', async () => {
-      const chosen = (await this.services.settings.app()).projectsFolder;
-      if (chosen && (await stat(chosen).then((s) => s.isDirectory(), () => false))) return chosen;
-      const dev = join(homedir(), 'SaturnProjects');
-      return mkdir(dev, { recursive: true }).then(() => dev, () => homedir());
+    this.handle('projects', 'defaultParentDir', () => this.defaultParentDir());
+  }
+
+  private async defaultParentDir(): Promise<string> {
+    const chosen = (await this.services.settings.app()).projectsFolder;
+    if (chosen && (await stat(chosen).then((s) => s.isDirectory(), () => false))) return chosen;
+    const dev = saturnProjectsDir('Code');
+    return mkdir(dev, { recursive: true }).then(() => dev, () => homedir());
+  }
+
+  private async typeParentDir(typeName: string): Promise<string> {
+    const dir = saturnProjectsDir(pluralName(typeName).replace(/\s+/g, '').replace(/[\\/:*?"<>|]/g, '-'));
+    await mkdir(dir, { recursive: true });
+    return dir;
+  }
+
+  private registerProjectTypes(): void {
+    const { host, projectTypes, windows, modules } = this.services;
+    const typeOf = async (typeId: string) => {
+      const type = (await modules.snapshot()).projectTypes.find((t) => t.id === typeId);
+      if (!type) throw new Error("That project type isn't installed");
+      return type;
+    };
+    const open = async (typeId: string, path: string) => {
+      const type = await typeOf(typeId);
+      if (!existsSync(join(path, type.marker))) throw new Error(`That folder isn't a ${type.name}`);
+      await projectTypes.touch(typeId, path, basename(path));
+      windows.openProjectType(path, typeId);
+    };
+    this.handle('projectTypes', 'recent', (_e, typeId: string) => projectTypes.list(typeId));
+    this.handle('projectTypes', 'remove', (_e, typeId: string, path: string) => projectTypes.remove(typeId, path));
+    this.handle('projectTypes', 'open', (_e, typeId: string, path: string) => open(typeId, path));
+    this.handle('projectTypes', 'openDialog', async (e, typeId: string) => {
+      const picked = await dialog.showOpenDialog(this.senderWindow(e), { title: `Open a ${(await typeOf(typeId)).name}`, properties: ['openDirectory'] });
+      const path = picked.canceled ? null : picked.filePaths[0];
+      if (!path) return false;
+      await open(typeId, path);
+      return true;
     });
+    this.handle('projectTypes', 'create', async (_e, typeId: string, name: string) => {
+      const type = await typeOf(typeId);
+      const title = name.trim();
+      if (!title) throw new Error('Give it a name');
+      const path = join(await this.typeParentDir(type.name), title.replace(/[\\/:*?"<>|]/g, '-'));
+      if (existsSync(path)) throw new Error('A folder with that name already exists');
+      await mkdir(path, { recursive: true });
+      try {
+        await writeFile(join(path, type.marker), '{}\n');
+        await host.createProjectType(typeId, { projectPath: path, name: title });
+        if (!existsSync(join(path, type.marker))) throw new Error(`The extension removed the ${type.marker} file while creating the project`);
+      } catch (err) {
+        await rm(path, { recursive: true, force: true });
+        throw err;
+      }
+      await open(typeId, path);
+      return path;
+    });
+    const ctx = (e: IpcMainInvokeEvent) => ({ projectPath: this.projectOf(e) });
+    const checkDocument = async (id: string, path: string) => {
+      const doc = documentFor(await modules.snapshot(), resolve(path));
+      if (doc?.id !== id) throw new Error(`${path} isn't a ${id} document`);
+    };
+    this.handle('documents', 'html', async (e, id: string, path: string, text: string) => {
+      await checkDocument(id, path);
+      return host.documentHtml(id, { ...ctx(e), path, text });
+    });
+    this.handle('documents', 'message', async (e, id: string, path: string, message: unknown) => {
+      await checkDocument(id, path);
+      return host.documentMessage(id, message, { ...ctx(e), path });
+    });
+    this.handle('documents', 'projectImage', async (e, relativePath: string) => {
+      const root = await realpath(this.projectOf(e));
+      const full = await realpath(resolve(root, relativePath)).catch(() => {
+        throw new Error("That image doesn't exist");
+      });
+      if (!full.startsWith(root + sep)) throw new Error('That image is outside the project');
+      const type = IMAGE_TYPES[extname(full).toLowerCase()];
+      if (!type) throw new Error("That isn't a supported image");
+      if ((await stat(full)).size > MAX_PAGE_IMAGE_BYTES) throw new Error('That image is over 5 MB');
+      return `data:${type};base64,${(await readFile(full)).toString('base64')}`;
+    });
+    this.handle('search', 'query', (e, query: string) => host.search(query, ctx(e)));
+    this.handle('search', 'open', (e, moduleId: string, id: string) => host.searchOpen(moduleId, id, ctx(e)));
+    this.handle('clipboard', 'readText', () => clipboard.readText());
+    this.handle('clipboard', 'writeText', (_e, text: string) => clipboard.writeText(String(text)));
+    this.handle('clipboard', 'writeImage', async (_e, dataUrl: string) => {
+      const image = nativeImage.createFromDataURL(String(dataUrl));
+      if (image.isEmpty()) throw new Error("That isn't an image");
+      await clipboard.write([new ClipboardItem({ 'image/png': new Blob([image.toPNG()], { type: 'image/png' }) })]);
+    });
+    const { projectCrypto } = this.services;
+    this.handle('projectTypes', 'lockState', (e) => projectCrypto.state(this.projectOf(e)));
+    this.handle('projectTypes', 'unlock', (e, password: string, remember: boolean) => projectCrypto.unlock(this.projectOf(e), password, remember));
+    this.handle('projectTypes', 'lock', (e) => projectCrypto.lock(this.projectOf(e)));
+    this.handle('projectTypes', 'encrypt', (e, password: string, remember: boolean) => projectCrypto.enableKeyOnly(this.projectOf(e), password, remember));
+    this.handle('projectTypes', 'decrypt', (e, password: string) => projectCrypto.disableKeyOnly(this.projectOf(e), password));
+    this.handle('projectTypes', 'changePassword', (e, current: string, next: string) => projectCrypto.changePassword(this.projectOf(e), current, next));
   }
 
   private registerThemes(): void {

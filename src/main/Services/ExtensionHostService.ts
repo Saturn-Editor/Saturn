@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { utilityProcess, type UtilityProcess } from 'electron';
-import { RUN_PROVIDER, TESTS_PROVIDER, versionsProvider, type DocCommentRequest, type InputOptions, type LanguageVersion, type SymbolRename, type LanguageVersionChoices, type TestDebugLaunch, type TestEvent, type TestGroup, type EditorEvent, type EditorFile, type LanguageManifest, type MessageKind, type ModuleMessage, type NotificationAction, type SettingValues, type TreeItem } from '@shared/modules';
+import { RUN_PROVIDER, TESTS_PROVIDER, documentProvider, moduleFilesGlob, projectTypeProvider, versionsProvider, type ExtensionManifest, type SearchResult, type DocCommentRequest, type InputOptions, type LanguageVersion, type SymbolRename, type LanguageVersionChoices, type TestDebugLaunch, type TestEvent, type TestGroup, type EditorEvent, type EditorFile, type LanguageManifest, type MessageKind, type ModuleMessage, type NotificationAction, type SettingValues, type TreeItem } from '@shared/modules';
+import type { NotebookLock } from '@shared/notebooks';
 import { Rpc } from '@shared/rpc';
 import type { InstalledModule } from './CodeModuleService';
 
@@ -20,6 +21,19 @@ export interface HostEvents {
   languageVersion(projectPath: string, languageId: string): Promise<LanguageVersion | null>;
   showInput(projectPath: string, options: InputOptions): Promise<string | null>;
   renameFile(projectPath: string, path: string, newName: string): Promise<string>;
+  documentSetText(path: string, text: string): void;
+  documentPost(path: string, message: unknown): void;
+  showOpenDialog(projectPath: string, options: { title?: string; filters?: DialogFilter[]; multiple?: boolean }): Promise<string[] | null>;
+  showSaveDialog(projectPath: string, options: { title?: string; defaultName?: string; filters?: DialogFilter[] }): Promise<string | null>;
+  encryptionState(projectPath: string): Promise<NotebookLock>;
+  encryptText(projectPath: string, text: string): Promise<string>;
+  decryptText(projectPath: string, text: string): Promise<string>;
+  sandboxRun(code: string, timeout?: number): Promise<unknown>;
+}
+
+export interface DialogFilter {
+  name: string;
+  extensions: string[];
 }
 
 type Ctx = { projectPath: string };
@@ -68,6 +82,14 @@ export class ExtensionHostService {
     rpc.handle('languageVersion', (projectPath: string, languageId: string) => this.events.languageVersion(projectPath, languageId));
     rpc.handle('showInput', (projectPath: string, options: InputOptions) => this.events.showInput(projectPath, options));
     rpc.handle('renameFile', (projectPath: string, path: string, newName: string) => this.events.renameFile(projectPath, path, newName));
+    rpc.handle('documentSetText', (path: string, text: string) => this.events.documentSetText(path, text));
+    rpc.handle('documentPost', (path: string, message: unknown) => this.events.documentPost(path, message));
+    rpc.handle('showOpenDialog', (projectPath: string, options: Parameters<HostEvents['showOpenDialog']>[1]) => this.events.showOpenDialog(projectPath, options));
+    rpc.handle('showSaveDialog', (projectPath: string, options: Parameters<HostEvents['showSaveDialog']>[1]) => this.events.showSaveDialog(projectPath, options));
+    rpc.handle('encryptionState', (projectPath: string) => this.events.encryptionState(projectPath));
+    rpc.handle('encryptText', (projectPath: string, text: string) => this.events.encryptText(projectPath, text));
+    rpc.handle('decryptText', (projectPath: string, text: string) => this.events.decryptText(projectPath, text));
+    rpc.handle('sandboxRun', (code: string, timeout?: number) => this.events.sandboxRun(code, timeout));
     child.on('message', (message) => rpc.receive(message));
     child.on('exit', (code) => {
       rpc.rejectAll('The extension host stopped');
@@ -87,8 +109,16 @@ export class ExtensionHostService {
       if (c?.runConfigurations) provides.push(RUN_PROVIDER);
       if (c?.tests) provides.push(TESTS_PROVIDER);
       for (const language of c?.languages ?? []) if (language.versions) provides.push(versionsProvider(language.id));
+      const ec = m.manifest.contributes as ExtensionManifest['contributes'];
+      for (const d of ec?.documents ?? []) provides.push(documentProvider(d.id));
+      for (const t of ec?.projectTypes ?? []) provides.push(projectTypeProvider(t.id));
       const languages = (c?.languages ?? []).map((l) => l.id);
-      return { id: m.manifest.id, dir: m.dir, main: m.manifest.main, settings: m.settings, storageDir: m.storageDir, events: m.manifest.activationEvents, provides, languages };
+      const watch = [
+        ...(c?.languages ?? []).map((l) => moduleFilesGlob(l.extensions)),
+        ...(ec?.documents ?? []).map((d) => moduleFilesGlob(d.extensions)),
+        ...(ec?.projectTypes ?? []).map((t) => t.marker),
+      ].filter((g): g is string => !!g);
+      return { id: m.manifest.id, dir: m.dir, main: m.manifest.main, settings: m.settings, storageDir: m.storageDir, startup: m.manifest.startup ?? 'dynamic', provides, languages, watch };
     });
     // Open files are known before modules activate, so `saturn.editor` answers from the start.
     for (const [projectPath, state] of this.editors) {
@@ -217,6 +247,34 @@ export class ExtensionHostService {
     } finally {
       this.createProgress.delete(createId);
     }
+  }
+
+  documentHtml(id: string, ctx: Ctx & { path: string; text: string }): Promise<string> {
+    return this.call('documentHtml', id, ctx);
+  }
+
+  documentMessage(id: string, message: unknown, ctx: Ctx & { path: string }): Promise<void> {
+    return this.call('documentMessage', id, message, ctx);
+  }
+
+  createProjectType(id: string, ctx: Ctx & { name: string }): Promise<void> {
+    return this.call('createProjectType', id, ctx);
+  }
+
+  search(query: string, ctx: Ctx): Promise<(SearchResult & { moduleId: string })[]> {
+    return this.call('searchQuery', query, ctx);
+  }
+
+  searchOpen(moduleId: string, id: string, ctx: Ctx): Promise<void> {
+    return this.call('searchOpen', moduleId, id, ctx);
+  }
+
+  encryptionWillRemove(projectPath: string): Promise<void> {
+    return this.call('encryptionWillRemove', projectPath);
+  }
+
+  encryptionChanged(projectPath: string, state: NotebookLock): void {
+    void this.ready.then(() => this.rpc?.notify('encryptionChanged', projectPath, state));
   }
 
   symbolRenamed(event: SymbolRename, ctx: Ctx): Promise<void> {

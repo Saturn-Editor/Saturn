@@ -1,6 +1,7 @@
 import { effect, signal } from '@preact/signals';
 import type { Extension } from '@codemirror/state';
-import type { ContributionSnapshot, EditorSelection, LanguageFeature, ModuleLook } from '@shared/modules';
+import { documentFor, type ContributionSnapshot, type EditorSelection, type LanguageFeature, type ModuleLook } from '@shared/modules';
+import { commandVisible } from '@renderer/commands/CommandRegistry';
 import type { AppSettings } from '@shared/types';
 import { ModuleIcon, QuestionIcon } from '@renderer/components';
 import { editorBehaviour } from '@renderer/editor/codemirrorSetup';
@@ -18,7 +19,7 @@ import { baseName } from '@renderer/helpers';
 const EDITOR_REPORT_MS = 300;
 const SELECTION_REPORT_MS = 150;
 
-export const EMPTY_SNAPSHOT: ContributionSnapshot = { languages: [], panels: [], commands: [], previews: [], fileTemplates: [], newProject: [], settings: [], buttons: [], debuggers: [] };
+export const EMPTY_SNAPSHOT: ContributionSnapshot = { languages: [], panels: [], commands: [], previews: [], fileTemplates: [], newProject: [], settings: [], buttons: [], debuggers: [], projectTypes: [], documents: [] };
 
 export type LanguageInfo = ContributionSnapshot['languages'][number];
 
@@ -255,7 +256,11 @@ export class ModuleBridge {
         id: cmd.id,
         title: cmd.title,
         source: { id: cmd.moduleId, label: cmd.moduleName, icon: <ModuleIcon icon={cmd.icon} badge={cmd.badge} /> },
-        run: () => api.runCommand(cmd.id),
+        run: () => api.runCommand(cmd.id, ws.documents.activePath.value ?? undefined),
+        visible: () => commandVisible(cmd.when, {
+          projectType: ws.projectType?.id ?? null,
+          activeDocument: (ws.documents.activePath.value && documentFor(this.snapshot.value, ws.documents.activePath.value)?.id) || null,
+        }),
       }));
     }
     const conditional: { panel: (typeof snapshot.panels)[number]; dispose: (() => void) | null }[] = [];
@@ -269,6 +274,7 @@ export class ModuleBridge {
       render: () => (panel.kind === 'webview' ? <WebviewPanel panelId={panel.id} /> : <ModuleTreePanel panelId={panel.id} />),
     });
     for (const panel of snapshot.panels) {
+      if (ws.projectType && panel.moduleId !== ws.projectType.moduleId && !ws.keeps('otherPanels')) continue;
       if (panel.showWhen?.length) conditional.push({ panel, dispose: null });
       else this.disposers.push(register(panel));
     }

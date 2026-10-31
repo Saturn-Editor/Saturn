@@ -7,6 +7,7 @@ import type {
   CodeAction, CodeActionRequest, CodeLensItem, CompletionItem, InlayHint, SemanticToken, CompletionRequest, Diagnostic, DiagnosticSeverity, DocumentRequest, DocumentSymbol, FileEdits, MessageKind, ModuleMessage,
   NotificationAction, ReferenceLocation, SettingValues, SignatureHelp, SourceLocation, TextEdit, TextRange,
 } from '@shared/modules';
+import { serverLanguages } from '@shared/modules';
 import type { InstalledLanguage as InstalledModule } from './CodeModuleService';
 
 interface Server {
@@ -535,7 +536,10 @@ export class LanguageServerService {
   }
 
   private ownerOf(languageId: string): InstalledModule | undefined {
-    return this.modules.find((m) => m.manifest.contributes?.languageServer?.languages.includes(languageId));
+    return this.modules.find((m) => {
+      const server = m.manifest.contributes?.languageServer;
+      return !!server && serverLanguages(m.manifest, server).includes(languageId);
+    });
   }
 
   /** Runs each of the module's `requires` checks once per session; reports what's missing to the user. */

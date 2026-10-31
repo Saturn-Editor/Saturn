@@ -1,6 +1,7 @@
 import { useRef, useState } from 'preact/hooks';
 import { Button, ChevronDownIcon, ContextMenu, type MenuEntry } from '@renderer/components';
 import { useWorkspace } from './EditorWorkspace';
+import { pluralName } from '@renderer/helpers';
 
 const CLOSE = '\0close';
 const NEW = '\0new';
@@ -11,7 +12,7 @@ const OPEN = '\0open';
  * then the other recent projects and notebooks. Picking one asks whether to open it in this window or a new one.
  */
 interface Target {
-  kind: 'project' | 'notebook';
+  kind: 'project' | 'notebook' | `type:${string}`;
   name: string;
   path: string;
 }
@@ -21,6 +22,7 @@ export function ProjectMenu() {
   const [open, setOpen] = useState(false);
   const [projects, setProjects] = useState<Target[]>([]);
   const [notebooks, setNotebooks] = useState<Target[]>([]);
+  const [typed, setTyped] = useState<{ label: string; targets: Target[] }[]>([]);
   const [choosing, setChoosing] = useState<Target | null>(null);
   const anchor = useRef<HTMLButtonElement>(null);
 
@@ -30,6 +32,10 @@ export function ProjectMenu() {
         list.filter((t) => t.path !== ws.projectPath && !t.missing).map((t) => ({ kind, name: t.name, path: t.path }));
       void window.saturn.projects.recent().then((list) => setProjects(usable(list, 'project').slice(0, 10)));
       void window.saturn.notebooks.list().then((list) => setNotebooks(usable(list, 'notebook')));
+      void Promise.all(ws.modules.snapshot.value.projectTypes.map(async (t) => ({
+        label: pluralName(t.name),
+        targets: usable(await window.saturn.projectTypes.recent(t.id), `type:${t.id}`).slice(0, 10),
+      }))).then(setTyped);
     }
     setOpen(!open);
   };
@@ -43,13 +49,14 @@ export function ProjectMenu() {
     { id: CLOSE, label: ws.isNotebook ? 'Close Notebook' : 'Close Project', testId: 'project-close' },
     ...(projects.length ? [{ separator: true } as const, { group: 'Switch to' } as const, ...projects.map(targetItem)] : []),
     ...(notebooks.length ? [{ separator: true } as const, { group: 'Notebooks' } as const, ...notebooks.map(targetItem)] : []),
+    ...typed.flatMap((g) => (g.targets.length ? [{ separator: true } as const, { group: g.label } as const, ...g.targets.map(targetItem)] : [])),
   ];
 
   const pick = (id: string) => {
     if (id === NEW) return window.saturn.windows.openNewProject();
     if (id === OPEN) return void window.saturn.projects.openDialog();
     if (id === CLOSE) return window.saturn.window.close();
-    setChoosing([...projects, ...notebooks].find((t) => `${t.kind}:${t.path}` === id) ?? null);
+    setChoosing([...projects, ...notebooks, ...typed.flatMap((g) => g.targets)].find((t) => `${t.kind}:${t.path}` === id) ?? null);
   };
 
   const openChosen = async (here: boolean) => {
@@ -57,6 +64,7 @@ export function ProjectMenu() {
     setChoosing(null);
     if (!target) return;
     if (target.kind === 'notebook') await window.saturn.notebooks.open(target.path);
+    else if (target.kind.startsWith('type:')) await window.saturn.projectTypes.open(target.kind.slice(5), target.path);
     else if ((await window.saturn.projects.openPath(target.path)) !== 'opened') return;
     if (here) window.saturn.window.close();
   };

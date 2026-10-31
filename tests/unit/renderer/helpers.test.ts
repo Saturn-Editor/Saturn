@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { baseName, errorText, parentOf } from '@renderer/helpers';
+import { baseName, errorText, parentOf, pluralName } from '@renderer/helpers';
 import { isPagePath, pageForLink, pageId, pageLink, subpageFolder } from '@renderer/notebooks/pages';
 import { leaves } from '@renderer/panels/builtin/TestsController';
 
 describe('helpers', () => {
+  it('names project types in the plural for the Welcome sidebar', () => {
+    expect(pluralName('API Workspace')).toBe('API Workspaces');
+    expect(pluralName('Diagrams')).toBe('Diagrams');
+  });
+
   it('strips the IPC prefix from error messages', () => {
     expect(errorText(new Error("Error invoking remote method 'saturn:fs:move': Error: A file named x already exists"))).toBe('A file named x already exists');
   });

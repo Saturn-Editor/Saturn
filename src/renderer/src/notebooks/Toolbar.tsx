@@ -59,31 +59,6 @@ function LinkForm({ editor, targets, onDone }: { editor: Editor; targets: LinkTa
   );
 }
 
-export function TableToolbar({ editor }: { editor: Editor }) {
-  const [, setVersion] = useState(0);
-  useEffect(() => {
-    const bump = () => setVersion((v) => v + 1);
-    editor.on('transaction', bump);
-    return () => void editor.off('transaction', bump);
-  }, [editor]);
-  const chain = () => editor.chain().focus();
-  return (
-    <div class="flex items-center gap-0.5 p-0.5" data-testid="notebook-table-toolbar">
-      <Tool label="Row above" title="Add a row above" onClick={() => chain().addRowBefore().run()} />
-      <Tool label="Row below" title="Add a row below" onClick={() => chain().addRowAfter().run()} />
-      <Divider />
-      <Tool label="Column left" title="Add a column to the left" onClick={() => chain().addColumnBefore().run()} />
-      <Tool label="Column right" title="Add a column to the right" onClick={() => chain().addColumnAfter().run()} />
-      <Divider />
-      <Tool label="Header" title="Header row" active={editor.isActive('tableHeader')} onClick={() => chain().toggleHeaderRow().run()} />
-      <Divider />
-      <Tool label="Delete row" title="Delete this row" onClick={() => chain().deleteRow().run()} />
-      <Tool label="Delete column" title="Delete this column" onClick={() => chain().deleteColumn().run()} />
-      <Tool label="Delete table" title="Delete the table" onClick={() => chain().deleteTable().run()} />
-    </div>
-  );
-}
-
 export function Toolbar({ editor, targets }: { editor: Editor; targets: LinkTargets }) {
   const [, setVersion] = useState(0);
   const [linking, setLinking] = useState(false);

@@ -3,7 +3,7 @@ import { createContext } from 'preact';
 import { useContext } from 'preact/hooks';
 import type { EditorView } from '@codemirror/view';
 import type { SaturnApi } from '@shared/api';
-import { applyTextEdits, type FileEdits, type InputOptions, type MessageKind, type ReferenceLocation } from '@shared/modules';
+import { ALWAYS_PANELS, applyTextEdits, type ContributionSnapshot, type KeepPart, type FileEdits, type InputOptions, type MessageKind, type ReferenceLocation } from '@shared/modules';
 import { TestsIcon, CollapseAllIcon, CommitIcon, DebugIcon, ExpandAllIcon, IconButton, RefreshIcon, FileIcon, FolderIcon, GitIcon, NoticesIcon, OutlineIcon, TerminalIcon, UsagesIcon } from '@renderer/components';
 import { DebugController } from '@renderer/panels/builtin/DebugController';
 import { DebugPanel } from '@renderer/panels/builtin/DebugPanel';
@@ -22,8 +22,7 @@ import { DockLayoutModel } from '@renderer/panels/DockLayoutModel';
 import { PanelRegistry, type PanelDefinition } from '@renderer/panels/PanelRegistry';
 import { emptyPage, PAGE_EXTENSION, type NotebookLock } from '@shared/notebooks';
 import { PreviewRegistry } from '@renderer/preview/PreviewRegistry';
-import { ModuleBridge } from '@renderer/modules/ModuleBridge';
-import { ProjectPanel } from '@renderer/panels/builtin/ProjectPanel';
+import { ModuleBridge } from '@renderer/modules/ModuleBridge';import { ProjectPanel } from '@renderer/panels/builtin/ProjectPanel';
 import { TerminalPanel } from '@renderer/panels/builtin/TerminalPanel';
 import { TerminalController } from '@renderer/panels/builtin/TerminalController';
 import { baseName } from '@renderer/helpers';
@@ -54,6 +53,7 @@ export class EditorWorkspace {
   readonly notebookLock = signal<NotebookLock>('none');
   readonly pageSavers = new Set<() => Promise<void>>();
   readonly pageReloads = signal<Record<string, number>>({});
+  readonly documentSent = new Map<string, string>();
 
   readonly pageTitles = signal<Record<string, string>>({});
 
@@ -73,7 +73,7 @@ export class EditorWorkspace {
     this.pageReloads.value = { ...this.pageReloads.value, [path]: (this.pageReloads.value[path] ?? 0) + 1 };
     await this.refreshTitles();
   }
-  readonly encryptionDialog = signal<'encrypt' | 'password' | 'decrypt' | null>(null);
+  readonly encryptionDialog = signal<'encrypt' | 'password' | 'decrypt' | 'unlock' | null>(null);
   readonly inputPrompt = signal<{ options: InputOptions; resolve: (value: string | null) => void } | null>(null);
   readonly branchSwitchPrompt = signal<{ branch: string; resolve: (mode: 'bring' | 'shelve' | null) => void } | null>(null);
   /** Requests from the Project panel's title-bar buttons; the panel acts on each new one. */
@@ -143,8 +143,16 @@ export class EditorWorkspace {
 
   async load(): Promise<void> {
     // Modules first, so their panels are known before the saved layout is applied.
-    if (!this.isNotebook) await this.modules.start();
-    else {
+    this.api.documents.onSetText((path, text) => {
+      if (!this.documents.docs.value.some((d) => d.path === path)) return;
+      this.documentSent.set(path, text);
+      this.documents.setText(path, text);
+    });
+    if (!this.isNotebook) {
+      if (this.isProjectType) await this.applyProjectType(await this.api.modules.snapshot());
+      await this.modules.start();
+      if (!this.isProjectType && this.modules.snapshot.value.projectTypes.some((t) => t.encryption)) await this.registerProjectEncryption();
+    } else {
       this.notebookLock.value = await this.api.notebooks.lockState().catch(() => 'none' as const);
       this.notebookName.value = await this.api.notebooks.name().catch(() => null);
       this.documents.pageName = (path) => this.titleOf(path);
@@ -156,9 +164,22 @@ export class EditorWorkspace {
       });
       this.notebookLock.subscribe(() => void this.refreshTitles());
     }
-    this.layout = new DockLayoutModel(this.panels, await this.api.layout.load());
+    const saved = await this.api.layout.load();
+    this.layout = new DockLayoutModel(this.panels, saved);
     this.layout.clampTo({ width: window.innerWidth, height: window.innerHeight });
+    const ownLeft = this.projectType && !saved
+      ? this.modules.snapshot.value.panels.find((p) => p.moduleId === this.projectType!.moduleId && p.dock === 'left')?.id
+      : undefined;
+    if (ownLeft) {
+      const stop = this.panels.changed.subscribe(() => {
+        if (!this.panels.get(ownLeft)) return;
+        this.layout.sync();
+        this.layout.show(ownLeft);
+        queueMicrotask(() => stop());
+      });
+    }
     this.layout.state.subscribe(() => this.scheduleSave());
+    void this.api.modules.windowReady().catch(() => undefined);
     if (!this.isNotebook) {
       let separate = (await this.api.settings.get()).debugWindow === 'separate';
       this.api.settings.onChanged((s) => (separate = s.debugWindow === 'separate'));
@@ -260,7 +281,40 @@ export class EditorWorkspace {
   }
 
   private registerPanel(def: PanelDefinition): void {
-    if (this.isDebugWindow ? DEBUG_PANELS.has(def.id) : !this.isNotebook || NOTEBOOK_PANELS.has(def.id)) this.panels.register(def);
+    if (this.isProjectType) this.typePanels.push(def);
+    else if (this.isDebugWindow ? DEBUG_PANELS.has(def.id) : !this.isNotebook || NOTEBOOK_PANELS.has(def.id)) this.panels.register(def);
+  }
+
+  private readonly typePanels: PanelDefinition[] = [];
+  projectType: ContributionSnapshot['projectTypes'][number] | null = null;
+
+  get isProjectType(): boolean {
+    return this.api.window.mode === 'projectType';
+  }
+
+  keeps(part: KeepPart): boolean {
+    return !this.isProjectType || (this.projectType?.keep ?? []).includes(part);
+  }
+
+  private async applyProjectType(snapshot: ContributionSnapshot): Promise<void> {
+    this.projectType = snapshot.projectTypes.find((t) => t.id === this.api.window.projectType) ?? null;
+    const allowed = new Set<string>([...ALWAYS_PANELS, ...(this.projectType?.keep ?? [])]);
+    for (const def of this.typePanels) if (allowed.has(def.id)) this.panels.register(def);
+    if (this.projectType?.encryption) await this.registerProjectEncryption();
+  }
+
+  private async registerProjectEncryption(): Promise<void> {
+    this.notebookLock.value = await this.api.projectTypes.lockState().catch(() => 'none' as const);
+    const source = { id: 'core', label: 'Saturn' } as const;
+    const add = (id: string, title: string, run: () => void | Promise<void>) => this.commands.register({ id: `core.${id}`, title, source, run });
+    add('encryptProject', 'Encrypt Project…', () => void (this.encryptionDialog.value = 'encrypt'));
+    add('unlockProject', 'Unlock Project…', () => void (this.encryptionDialog.value = 'unlock'));
+    add('projectPassword', 'Change Project Password…', () => void (this.encryptionDialog.value = 'password'));
+    add('decryptProject', 'Remove Project Encryption…', () => void (this.encryptionDialog.value = 'decrypt'));
+    add('lockProject', 'Lock Project', async () => {
+      await this.api.projectTypes.lock();
+      this.notebookLock.value = await this.api.projectTypes.lockState();
+    });
   }
 
   get isDebugWindow(): boolean {

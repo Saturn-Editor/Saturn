@@ -5,7 +5,8 @@
 import { mkdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
-import { RUN_PROVIDER, TESTS_PROVIDER, versionsProvider, type DocCommentRequest, type InputOptions, type SymbolRename, type LanguageVersion, type FileCoverage, type TestDebugLaunch, type TestEvent, type TestGroup, type TestItem, type TestResult, type EditorEvent, type EditorFile, type EditorSelection, type MessageKind, type NotificationAction, type SettingValue, type SettingValues, type TreeItem } from '@shared/modules';
+import { RUN_PROVIDER, TESTS_PROVIDER, documentProvider, projectTypeProvider, versionsProvider, type SearchResult, type DocCommentRequest, type InputOptions, type SymbolRename, type LanguageVersion, type FileCoverage, type TestDebugLaunch, type TestEvent, type TestGroup, type TestItem, type TestResult, type EditorEvent, type EditorFile, type EditorSelection, type MessageKind, type NotificationAction, type SettingValue, type SettingValues, type TreeItem } from '@shared/modules';
+import type { NotebookLock } from '@shared/notebooks';
 import { Rpc } from '@shared/rpc';
 import { findFiles } from '../main/Helpers/findFiles';
 
@@ -33,7 +34,7 @@ export interface SaturnModuleApi {
    * the SATURN_MODULE_STORAGE environment variable.
    */
   storagePath: string;
-  commands: { register(id: string, run: (ctx: ModuleContext) => void | Promise<void>): void };
+  commands: { register(id: string, run: (ctx: ModuleContext & { path?: string }) => void | Promise<void>): void };
   panels: {
     registerTree(id: string, provider: TreeProvider): void;
     /** Reloads the whole tree, or only the children of `itemId`. */
@@ -77,6 +78,8 @@ export interface SaturnModuleApi {
      */
     notify(notification: { title: string; message?: string; kind?: MessageKind; actions?: NotificationAction[] }): void;
     showInput(projectPath: string, options: InputOptions): Promise<string | null>;
+    showOpenDialog(projectPath: string, options: { title?: string; filters?: DialogFilter[]; multiple?: boolean }): Promise<string[] | null>;
+    showSaveDialog(projectPath: string, options: { title?: string; defaultName?: string; filters?: DialogFilter[] }): Promise<string | null>;
   };
   languageServer: {
     /** Restarts this module's language server (and re-checks `requires`), e.g. after installing it. */
@@ -168,6 +171,41 @@ export interface SaturnModuleApi {
       debug?(ctx: ModuleContext & { ids: string[] | null }): TestDebugLaunch | Promise<TestDebugLaunch>;
     }): void;
   };
+  documents: {
+    registerEditor(id: string, editor: DocumentEditor): void;
+    setText(path: string, text: string): void;
+    postMessage(path: string, message: unknown): void;
+  };
+  projectTypes: {
+    onCreate(id: string, handler: (ctx: ModuleContext & { name: string }) => void | Promise<void>): void;
+  };
+  search: {
+    registerProvider(provider: SearchProvider): void;
+  };
+  sandbox: {
+    run(code: string, options?: { timeout?: number }): Promise<unknown>;
+  };
+  encryption: {
+    state(projectPath: string): Promise<NotebookLock>;
+    encrypt(projectPath: string, text: string): Promise<string>;
+    decrypt(projectPath: string, text: string): Promise<string>;
+    onDidChangeState(listener: (e: { projectPath: string; state: NotebookLock | 'removing' }) => void | Promise<void>): void;
+  };
+}
+
+export interface DocumentEditor {
+  html(ctx: ModuleContext & { path: string; text: string }): string | Promise<string>;
+  onMessage?(message: unknown, ctx: ModuleContext & { path: string }): void | Promise<void>;
+}
+
+export interface SearchProvider {
+  search(query: string, ctx: ModuleContext): SearchResult[] | Promise<SearchResult[]>;
+  open?(id: string, ctx: ModuleContext): void | Promise<void>;
+}
+
+export interface DialogFilter {
+  name: string;
+  extensions: string[];
 }
 
 interface LoadedModule {
@@ -176,9 +214,10 @@ interface LoadedModule {
   main?: string;
   settings: SettingValues;
   storageDir: string;
-  events?: string[];
+  startup: 'onLaunch' | 'dynamic';
   provides: string[];
   languages?: string[];
+  watch?: string[];
 }
 
 type Fn = (...args: any[]) => any;
@@ -203,6 +242,9 @@ class ExtensionHost {
   private readonly openProjects = new Set<string>();
   private readonly webviews = new Map<string, { html: Fn; onMessage?: Fn }>();
   private readonly docComments = new Map<string, Fn>();
+  private readonly documentEditors = new Map<string, DocumentEditor>();
+  private readonly projectTypeCreators = new Map<string, Fn>();
+  private readonly searchProviders = new Map<string, SearchProvider>();
   /** Per project: its open files and the focused editor's file and selection, as its window reports them. */
   private readonly editors = new Map<string, { files: Map<string, EditorFile>; activePath: string | null; selection: EditorSelection | null }>();
 
@@ -221,7 +263,7 @@ class ExtensionHost {
   private editorEvent(projectPath: string, event: EditorEvent): void {
     const state = this.editorState(projectPath);
     if (event.type === 'file') {
-      if (event.file.languageId) void this.activateWhere((m) => m.events?.includes(`onLanguage:${event.file.languageId}`) ?? false);
+      if (event.file.languageId) void this.activateWhere((m) => m.languages?.includes(event.file.languageId!) ?? false);
       state.files.set(event.file.path, event.file);
       this.emit('editorFile', { projectPath, file: event.file });
     } else if (event.type === 'closed') {
@@ -262,12 +304,45 @@ class ExtensionHost {
     this.rpc.handle('renderPreview', async (id: string, text: string, ctx: ModuleContext & { path: string }) =>
       (await this.need(this.previews, id, 'preview'))(text, ctx));
     this.rpc.handle('symbolRenamed', async (event: SymbolRename, ctx: ModuleContext) => {
-      await this.activateWhere((m) => m.events?.includes(`onLanguage:${event.languageId}`) ?? false);
+      await this.activateWhere((m) => m.languages?.includes(event.languageId) ?? false);
       this.emit('symbolRenamed', { ...event, ...ctx });
     });
     this.rpc.handle('docComment', async (languageId: string, request: DocCommentRequest, ctx: ModuleContext) => {
-      if (!this.docComments.has(languageId)) await this.activateWhere((m) => m.events?.includes(`onLanguage:${languageId}`) ?? false);
+      if (!this.docComments.has(languageId)) await this.activateWhere((m) => m.languages?.includes(languageId) ?? false);
       return (await this.docComments.get(languageId)?.({ ...request, ...ctx })) ?? null;
+    });
+    this.rpc.handle('documentHtml', async (id: string, ctx: ModuleContext & { path: string; text: string }) => {
+      await this.activateWhere((m) => m.provides.includes(documentProvider(id)));
+      const editor = this.documentEditors.get(id);
+      if (!editor) throw new Error(`No editor registered for ${id}`);
+      return editor.html(ctx);
+    });
+    this.rpc.handle('documentMessage', async (id: string, message: unknown, ctx: ModuleContext & { path: string }) => {
+      await this.documentEditors.get(id)?.onMessage?.(message, ctx);
+    });
+    this.rpc.handle('createProjectType', async (id: string, ctx: ModuleContext & { name: string }) => {
+      await this.activateWhere((m) => m.provides.includes(projectTypeProvider(id)));
+      const create = this.projectTypeCreators.get(id);
+      if (!create) throw new Error(`The extension for ${id} didn't register saturn.projectTypes.onCreate`);
+      await create(ctx);
+    });
+    this.rpc.handle('searchQuery', async (query: string, ctx: ModuleContext) => {
+      const all = await Promise.all([...this.searchProviders].map(async ([moduleId, provider]) => {
+        try {
+          return (await provider.search(query, ctx)).map((r) => ({ ...r, moduleId }));
+        } catch (e) {
+          console.error(`[${moduleId}] search failed`, e);
+          return [];
+        }
+      }));
+      return all.flat();
+    });
+    this.rpc.handle('searchOpen', async (moduleId: string, id: string, ctx: ModuleContext) => {
+      await this.searchProviders.get(moduleId)?.open?.(id, ctx);
+    });
+    this.rpc.handle('encryptionChanged', (projectPath: string, state: NotebookLock) => this.emit('encryptionChanged', { projectPath, state }));
+    this.rpc.handle('encryptionWillRemove', async (projectPath: string) => {
+      await Promise.all((this.listeners.get('encryptionChanged') ?? []).map(({ fn }) => fn({ projectPath, state: 'removing' })));
     });
     this.rpc.handle('templateFile', async (id: string, ctx: TemplateContext) => {
       await this.activateWhere((m) => m.provides.includes(id));
@@ -364,7 +439,7 @@ class ExtensionHost {
     for (const m of modules) {
       this.settings.set(m.id, m.settings);
       if (!m.main) continue;
-      if (m.events && !m.events.includes('*') && (m.languages ?? []).every((id) => m.events!.includes(`onLanguage:${id}`))) {
+      if (m.startup !== 'onLaunch') {
         this.pending.set(m.id, m);
         continue;
       }
@@ -408,8 +483,7 @@ class ExtensionHost {
     this.emit('projectOpened', { projectPath });
     this.openProjects.add(projectPath);
     for (const m of [...this.pending.values()]) {
-      const globs = (m.events ?? []).filter((e) => e.startsWith('workspaceContains:')).map((e) => e.slice('workspaceContains:'.length));
-      for (const glob of globs) {
+      for (const glob of m.watch ?? []) {
         if ((await findFiles(projectPath, glob, 1)).length > 0) {
           await this.activate(m);
           break;
@@ -471,6 +545,8 @@ class ExtensionHost {
         showMessage: (message, options) => this.rpc.notify('showMessage', { message, kind: options?.kind ?? 'info', projectPath: options?.projectPath, moduleId }),
         notify: (n) => this.rpc.notify('notify', { ...n, moduleId }),
         showInput: (projectPath, options) => this.rpc.call<string | null>('showInput', projectPath, options),
+        showOpenDialog: (projectPath, options) => this.rpc.call<string[] | null>('showOpenDialog', projectPath, options),
+        showSaveDialog: (projectPath, options) => this.rpc.call<string | null>('showSaveDialog', projectPath, options),
       },
       languageServer: {
         restart: () => this.rpc.notify('restartLanguageServer', moduleId),
@@ -505,11 +581,31 @@ class ExtensionHost {
         postMessage: (panelId, message, projectPath) => this.rpc.notify('webviewPost', panelId, projectPath ?? null, message),
         refresh: (panelId) => this.rpc.notify('webviewRefresh', panelId),
       },
+      documents: {
+        registerEditor: (id, editor) => void this.documentEditors.set(id, editor),
+        setText: (path, text) => this.rpc.notify('documentSetText', path, text),
+        postMessage: (path, message) => this.rpc.notify('documentPost', path, message),
+      },
+      projectTypes: {
+        onCreate: (id, handler) => void this.projectTypeCreators.set(id, handler),
+      },
+      search: {
+        registerProvider: (provider) => void this.searchProviders.set(moduleId, provider),
+      },
+      sandbox: {
+        run: (code, options) => this.rpc.call<unknown>('sandboxRun', String(code), options?.timeout),
+      },
+      encryption: {
+        state: (projectPath) => this.rpc.call<NotebookLock>('encryptionState', projectPath),
+        encrypt: (projectPath, text) => this.rpc.call<string>('encryptText', projectPath, text),
+        decrypt: (projectPath, text) => this.rpc.call<string>('decryptText', projectPath, text),
+        onDidChangeState: (listener) => this.on('encryptionChanged', moduleId, listener),
+      },
     };
   }
 
   private async need<T>(map: Map<string, T>, id: string, what: string): Promise<T> {
-    if (!map.has(id)) await this.activateWhere((m) => m.provides.includes(id) || (m.events?.includes(`onCommand:${id}`) ?? false));
+    if (!map.has(id)) await this.activateWhere((m) => m.provides.includes(id));
     const found = map.get(id);
     if (!found) throw new Error(`No ${what} handler registered for ${id}`);
     return found;
