@@ -7,6 +7,17 @@ export interface Command {
   title: string;
   source: { id: 'core' | string; label: string; icon?: ComponentChild };
   run: () => void | Promise<void>;
+  visible?: () => boolean;
+}
+
+export function commandVisible(
+  when: { projectType?: string; document?: string } | undefined,
+  state: { projectType: string | null; activeDocument: string | null },
+): boolean {
+  if (!when) return true;
+  if (when.projectType !== undefined && when.projectType !== state.projectType) return false;
+  if (when.document !== undefined && when.document !== state.activeDocument) return false;
+  return true;
 }
 
 /** Every action the user can run from action search. Modules register theirs here too (Plan 3). */
@@ -28,11 +39,13 @@ export class CommandRegistry {
   async run(id: string): Promise<void> {
     const cmd = this.commands.get(id);
     if (!cmd) throw new Error(`Unknown command: ${id}`);
+    if (cmd.visible && !cmd.visible()) return;
     await cmd.run();
   }
 
   search(query: string, limit = 20): Command[] {
     return [...this.commands.values()]
+      .filter((cmd) => !cmd.visible || cmd.visible())
       .map((cmd) => ({ cmd, score: fuzzyScore(query, cmd.title) }))
       .filter((r): r is { cmd: Command; score: number } => r.score !== null)
       .sort((a, b) => b.score - a.score || a.cmd.title.localeCompare(b.cmd.title))

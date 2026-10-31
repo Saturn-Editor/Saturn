@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Badge, FileIcon, Menu, TextInput } from '@renderer/components';
 import { useWorkspace } from '@renderer/screens/editor/EditorWorkspace';
+import type { SearchResult } from '@shared/modules';
 import { fuzzyScore } from './fuzzy';
 import { shortcutFor } from './keymap';
 
 const PAGE_PREFIX = 'page:';
+const FOUND_PREFIX = 'found:';
 
 /** The search box in the top bar: finds and runs any registered command. */
 export function ActionSearch() {
@@ -34,8 +36,22 @@ export function ActionSearch() {
       .sort((a, b) => b.score - a.score || a.title.localeCompare(b.title))
       .slice(0, 8)
     : [];
+  const [found, setFound] = useState<{ query: string; items: (SearchResult & { moduleId: string })[] }>({ query: '', items: [] });
+  useEffect(() => {
+    const q = query.trim();
+    if (!ws.isProjectType || !q) return setFound({ query: '', items: [] });
+    const timer = setTimeout(() => {
+      void window.saturn.search.query(q).then((items) => setFound({ query: q, items: items.slice(0, 8) }), () => undefined);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [query]);
+  const extensionResults = found.query === query.trim() ? found.items : [];
   const actions = ws.commands.search(query, 12);
-  const results = [...pages.map((p) => ({ id: `${PAGE_PREFIX}${p.path}` })), ...actions];
+  const results = [
+    ...pages.map((p) => ({ id: `${PAGE_PREFIX}${p.path}` })),
+    ...extensionResults.map((r, i) => ({ id: `${FOUND_PREFIX}${i}` })),
+    ...actions,
+  ];
 
   const close = () => {
     setOpen(false);
@@ -47,7 +63,11 @@ export function ActionSearch() {
   const runCommand = (id: string) => {
     close();
     if (id.startsWith(PAGE_PREFIX)) void ws.documents.open(id.slice(PAGE_PREFIX.length));
-    else void ws.commands.run(id);
+    else if (id.startsWith(FOUND_PREFIX)) {
+      const r = extensionResults[Number(id.slice(FOUND_PREFIX.length))];
+      if (r?.path) void ws.documents.open(r.path);
+      else if (r) void window.saturn.search.open(r.moduleId, r.id);
+    } else void ws.commands.run(id);
   };
 
   const onKeyDown = (e: KeyboardEvent) => {
@@ -84,6 +104,7 @@ export function ActionSearch() {
           onPick={runCommand}
           items={[
             ...pages.map((p) => ({ id: `${PAGE_PREFIX}${p.path}`, label: p.title, icon: <FileIcon />, hint: 'Page' })),
+            ...extensionResults.map((r, i) => ({ id: `${FOUND_PREFIX}${i}`, label: r.label, icon: <FileIcon />, hint: r.detail ?? 'Search' })),
             ...actions.map((c) => {
               const shortcut = shortcutFor(c.id);
               return {

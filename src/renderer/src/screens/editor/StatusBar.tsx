@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { FILE_ENCODINGS, type FileEncoding } from '@shared/types';
-import type { LanguageVersion as LanguageVersionType, LanguageVersionChoices } from '@shared/modules';
+import { documentFor, type LanguageVersion as LanguageVersionType, type LanguageVersionChoices } from '@shared/modules';
 import { ContextMenu, type MenuEntry } from '@renderer/components';
 import { diagnosticCounts, onDiagnosticCounts } from '@renderer/modules/languageServer';
 import { errorText } from '@renderer/helpers';
@@ -46,7 +46,7 @@ export function StatusBar() {
           {counts.warnings} warning{counts.warnings === 1 ? '' : 's'}
         </span>
       )}
-      {doc && (
+      {doc && (doc.asText || !documentFor(ws.modules.snapshot.value, doc.path)) && (
         <span class="whitespace-nowrap flex items-center gap-1" data-testid="status-file">
           <LanguageVersion path={doc.path} />
           · {encodingLabel} · {doc.eol} · {ws.cursor.value}

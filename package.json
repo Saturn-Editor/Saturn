@@ -1,7 +1,7 @@
 {
   "name": "saturn-core",
-  "version": "0.0.5",
-  "saturnApi": "0.4.0",
+  "version": "0.1.0",
+  "saturnApi": "1.0.0",
   "description": "A lightweight, customisable, and extensible code editor.",
   "author": "Lewis Milburn",
   "main": "out/main/index.js",

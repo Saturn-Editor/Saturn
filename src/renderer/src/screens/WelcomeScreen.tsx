@@ -7,10 +7,11 @@ import { AboutPage } from './AboutPage';
 import { MarketplaceScreen } from './MarketplaceScreen';
 import { SettingsScreen } from './SettingsScreen';
 import {HelpPage} from "@renderer/screens/HelpPage";
-import { errorText } from '@renderer/helpers';
+import { errorText, pluralName } from '@renderer/helpers';
 import { NotebooksPage } from '@renderer/notebooks/NotebooksPage';
+import { ProjectTypePage } from './ProjectTypePage';
 
-type Page = 'projects' | 'notebooks' | 'marketplace' | 'settings' | 'help' | 'about';
+type Page = 'projects' | 'notebooks' | 'marketplace' | 'settings' | 'help' | 'about' | `type:${string}`;
 /** Every page shows inside the Welcome window; Settings and Marketplace are the same screens as their own windows. */
 type LocalPage = Page;
 
@@ -186,6 +187,7 @@ export function WelcomeScreen() {
         items={[
           { id: 'projects', label: 'Projects' },
           { id: 'notebooks', label: 'Notebooks' },
+          ...modules.projectTypes.map((t) => ({ id: `type:${t.id}` as Page, label: pluralName(t.name) })),
           { id: 'marketplace', label: 'Marketplace' },
           { id: 'settings', label: 'Settings' },
         ]}
@@ -199,6 +201,10 @@ export function WelcomeScreen() {
       {page === 'settings' && <div class="flex-1 min-w-0" data-testid="welcome-settings"><SettingsScreen embedded /></div>}
       {page === 'marketplace' && <div class="flex-1 min-w-0" data-testid="welcome-marketplace"><MarketplaceScreen embedded /></div>}
       {page === 'notebooks' && <NotebooksPage />}
+      {page.startsWith('type:') && (() => {
+        const type = modules.projectTypes.find((t) => `type:${t.id}` === page);
+        return type ? <ProjectTypePage key={type.id} type={type} /> : null;
+      })()}
       {page === 'help' && <HelpPage />}
       {page === 'about' && <AboutPage />}
       {page === 'projects' && (

@@ -333,6 +333,13 @@ export type FileReadResult =
 
 export const PROJECT_FOLDER = '.saturn';
 
+export interface RecentTypedProject {
+  path: string;
+  name: string;
+  openedAt: number;
+  missing: boolean;
+}
+
 export interface RunEntry {
   id: string;
   name: string;

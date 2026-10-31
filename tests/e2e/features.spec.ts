@@ -108,13 +108,15 @@ test('notebooks: table toolbar and code block languages', async () => {
   await nb.keyboard.type('/table');
   await nb.keyboard.press('Enter');
   await expect(content.locator('table tr')).toHaveCount(3);
-  const toolbar = nb.getByTestId('notebook-table-toolbar');
-  await expect(toolbar).toBeVisible();
-  await toolbar.getByRole('button', { name: 'Row below' }).click();
+  await content.locator('table').hover();
+  await nb.getByRole('button', { name: 'Add a row below' }).first().click();
   await expect(content.locator('table tr')).toHaveCount(4);
-  await toolbar.getByRole('button', { name: 'Column right' }).click();
+  await content.locator('table').hover();
+  await nb.getByRole('button', { name: 'Add a column to the right' }).first().click();
   await expect(content.locator('table tr').first().locator('th, td')).toHaveCount(4);
-  await toolbar.getByRole('button', { name: 'Delete table' }).click();
+  await content.locator('table').hover();
+  await nb.getByRole('button', { name: 'Table options' }).click();
+  await nb.getByRole('menuitem', { name: 'Delete table' }).click();
   await expect(content.locator('table')).toHaveCount(0);
 
   await content.click();
@@ -135,8 +137,7 @@ test('language versions in the status bar, and language settings under Languages
     const mod = join(userData, 'languages', 'fake-lang');
     mkdirSync(mod, { recursive: true });
     writeFileSync(join(mod, 'saturn-language.json'), JSON.stringify({
-      id: 'fake-lang', name: 'Fake Language', version: '1.0.0', saturnApi: '^0.3', main: 'module.js',
-      activationEvents: ['onLanguage:fake'],
+      id: 'fake-lang', name: 'Fake Language', version: '1.0.0', saturnApi: '^1.0', main: 'module.js',
       contributes: {
         languages: [{ id: 'fake', name: 'Fake', extensions: ['.fake'], versions: true }],
         settings: [{ id: 'flavour', label: 'Flavour', type: 'text', default: '' }],
@@ -204,7 +205,7 @@ test('tests panel runs tests from a module', async () => {
     writeFileSync(join(dir, 'math.test.js'), 'test("adds")\ntest("breaks")\n');
     const mod = join(userData, 'extensions', 'fake-tests');
     mkdirSync(mod, { recursive: true });
-    writeFileSync(join(mod, 'saturn-extension.json'), JSON.stringify({ id: 'fake-tests', name: 'Fake tests', version: '1.0.0', saturnApi: '^0.3', main: 'extension.js', contributes: { tests: true } }));
+    writeFileSync(join(mod, 'saturn-extension.json'), JSON.stringify({ id: 'fake-tests', name: 'Fake tests', version: '1.0.0', saturnApi: '^1.0', main: 'extension.js', contributes: { tests: true } }));
     writeFileSync(join(mod, 'extension.js'), `
 export function activate(saturn) {
   saturn.tests.registerController('fake', {
@@ -263,7 +264,7 @@ test('tests panel: stopping a run and tests found while running', async () => {
   const { app, editor } = await openProject((dir, userData) => {
     const mod = join(userData, 'extensions', 'slow-tests');
     mkdirSync(mod, { recursive: true });
-    writeFileSync(join(mod, 'saturn-extension.json'), JSON.stringify({ id: 'slow-tests', name: 'Slow tests', version: '1.0.0', saturnApi: '^0.3', main: 'extension.js', contributes: { tests: true } }));
+    writeFileSync(join(mod, 'saturn-extension.json'), JSON.stringify({ id: 'slow-tests', name: 'Slow tests', version: '1.0.0', saturnApi: '^1.0', main: 'extension.js', contributes: { tests: true } }));
     writeFileSync(join(mod, 'extension.js'), `
 let stopped = false;
 export function activate(saturn) {

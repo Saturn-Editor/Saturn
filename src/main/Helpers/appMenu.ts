@@ -1,5 +1,6 @@
 import { join } from 'node:path';
-import { app, Menu, shell, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, Menu, shell, type MenuItemConstructorOptions } from 'electron';
+import { channel } from '@shared/api';
 
 export const GITHUB_URL = 'https://github.com/Saturn-Editor/Saturn';
 const AUTHOR = 'Lewis Milburn';
@@ -30,7 +31,18 @@ export function setUpAppMenu(): void {
         ...(mac ? [] : [{ type: 'separator' as const }, { role: 'quit' as const }]),
       ],
     },
-    { role: 'editMenu' },
+    {
+      label: 'Edit',
+      submenu: [
+        { label: 'Undo', accelerator: 'CmdOrCtrl+Z', click: () => BrowserWindow.getFocusedWindow()?.webContents.send(channel('window', 'edit'), 'undo') },
+        { label: 'Redo', accelerator: mac ? 'Shift+Cmd+Z' : 'Ctrl+Y', click: () => BrowserWindow.getFocusedWindow()?.webContents.send(channel('window', 'edit'), 'redo') },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+      ],
+    },
     { label: 'View', submenu: [{ role: 'toggleDevTools' }, { type: 'separator' }, { role: 'togglefullscreen' }] },
     { label: 'Window', submenu: [{ role: 'minimize' }, ...(mac ? [{ role: 'zoom' as const }, { type: 'separator' as const }, { role: 'front' as const }] : [])] },
     {

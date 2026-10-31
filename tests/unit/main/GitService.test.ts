@@ -27,6 +27,19 @@ beforeEach(() => {
 });
 
 describe('GitService', () => {
+  it('unstages a ticked file once its edits are undone back to the last commit', async () => {
+    commit('a.txt', 'one\n', 'Add a');
+    commit('b.txt', 'b\n', 'Add b');
+    writeFileSync(join(root, 'a.txt'), 'two\n');
+    writeFileSync(join(root, 'b.txt'), 'bb\n');
+    run('add', '--', 'a.txt', 'b.txt');
+    writeFileSync(join(root, 'a.txt'), 'one\n');
+    writeFileSync(join(root, 'b.txt'), 'bbb\n');
+    const changes = (await git.status()).changes;
+    expect(changes.find((c) => c.path === 'a.txt')).toBeUndefined();
+    expect(changes.find((c) => c.path === 'b.txt')).toMatchObject({ index: 'M', worktree: 'M' });
+  });
+
   it('lists the history of one file only', async () => {
     commit('a.txt', 'one\n', 'Add a');
     commit('b.txt', 'b\n', 'Add b');

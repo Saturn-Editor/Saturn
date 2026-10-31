@@ -12,8 +12,13 @@ function Remember({ on, onChange }: { on: boolean; onChange: (on: boolean) => vo
   );
 }
 
-export function UnlockNotebook() {
+function useLockTarget() {
   const ws = useWorkspace();
+  return { ws, api: ws.isNotebook ? window.saturn.notebooks : window.saturn.projectTypes, noun: ws.isNotebook ? 'notebook' : 'project' };
+}
+
+export function UnlockNotebook() {
+  const { ws, api, noun } = useLockTarget();
   const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -23,8 +28,9 @@ export function UnlockNotebook() {
     if (!password || busy) return;
     setBusy(true);
     try {
-      await window.saturn.notebooks.unlock(password, remember);
-      ws.notebookLock.value = await window.saturn.notebooks.lockState();
+      await api.unlock(password, remember);
+      ws.notebookLock.value = await api.lockState();
+      if (ws.encryptionDialog.value === 'unlock') ws.encryptionDialog.value = null;
     } catch (e) {
       setProblem(errorText(e));
     } finally {
@@ -36,7 +42,7 @@ export function UnlockNotebook() {
   return (
     <div class="h-full flex items-center justify-center bg-editor" data-testid="notebook-locked">
       <div class="w-[360px] flex flex-col gap-3">
-        <div class="font-semibold text-strong">This notebook is locked</div>
+        <div class="font-semibold text-strong">This {noun} is locked</div>
         <TextInput secret autoFocus value={password} onInput={setPassword} placeholder="Password" testId="notebook-password" onKeyDown={(e) => e.key === 'Enter' && void unlock()} />
         <Remember on={remember} onChange={setRemember} />
         {problem && <p class="m-0 text-accent" role="alert">{problem}</p>}
@@ -48,10 +54,10 @@ export function UnlockNotebook() {
   );
 }
 
-const TITLES = { encrypt: 'Encrypt notebook', password: 'Change notebook password', decrypt: 'Remove notebook encryption' } as const;
+const TITLES = { encrypt: 'Encrypt', password: 'Change password', decrypt: 'Remove encryption' } as const;
 
 export function EncryptionDialog() {
-  const ws = useWorkspace();
+  const { ws, api, noun } = useLockTarget();
   const mode = ws.encryptionDialog.value;
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
@@ -60,11 +66,18 @@ export function EncryptionDialog() {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   if (!mode) return null;
+  if (mode === 'unlock') {
+    return (
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onKeyDown={(e) => e.key === 'Escape' && (ws.encryptionDialog.value = null)}>
+        <div class="w-[440px] h-56 bg-raised border border-border shadow-lg shadow-black/40"><UnlockNotebook /></div>
+      </div>
+    );
+  }
 
   const lock = ws.notebookLock.value;
-  const unavailable = mode === 'encrypt' ? (lock !== 'none' ? 'This notebook is already encrypted.' : null)
-    : lock === 'none' ? "This notebook isn't encrypted."
-      : lock === 'locked' && mode === 'password' ? 'Unlock the notebook first.' : null;
+  const unavailable = mode === 'encrypt' ? (lock !== 'none' ? `This ${noun} is already encrypted.` : null)
+    : lock === 'none' ? `This ${noun} isn't encrypted.`
+      : lock === 'locked' && mode === 'password' ? `Unlock the ${noun} first.` : null;
 
   const close = () => {
     setCurrent('');
@@ -82,10 +95,10 @@ export function EncryptionDialog() {
     setProblem(null);
     try {
       await Promise.all([...ws.pageSavers].map((save) => save()));
-      if (mode === 'encrypt') await window.saturn.notebooks.encrypt(next, remember);
-      else if (mode === 'password') await window.saturn.notebooks.changePassword(current, next);
-      else await window.saturn.notebooks.decrypt(current);
-      ws.notebookLock.value = await window.saturn.notebooks.lockState();
+      if (mode === 'encrypt') await api.encrypt(next, remember);
+      else if (mode === 'password') await api.changePassword(current, next);
+      else await api.decrypt(current);
+      ws.notebookLock.value = await api.lockState();
       close();
     } catch (e) {
       setProblem(errorText(e));
@@ -99,15 +112,17 @@ export function EncryptionDialog() {
   return (
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40" data-testid="notebook-encryption" onKeyDown={(e) => e.key === 'Escape' && close()}>
       <div class="w-[440px] p-4 bg-raised border border-border shadow-lg shadow-black/40 flex flex-col gap-3">
-        <div class="font-semibold text-strong">{TITLES[mode]}</div>
+        <div class="font-semibold text-strong">{TITLES[mode]} {noun}</div>
         {unavailable ? <p class="m-0">{unavailable}</p> : (
           <>
             {mode === 'encrypt' && (
               <p class="m-0 text-muted">
-                Your pages will be encrypted with your password. If you forget it the notebook can't be recovered. If your notebook is hosted in git, previous unencrypted copies in the history aren't protected.
+                {ws.isProjectType
+                  ? "This project's secrets will be encrypted with your password. If you forget it they can't be recovered. If your project is hosted in git, previous unencrypted copies in the history aren't protected."
+                  : "Your pages will be encrypted with your password. If you forget it the notebook can't be recovered. If your notebook is hosted in git, previous unencrypted copies in the history aren't protected."}
               </p>
             )}
-            {mode === 'decrypt' && <p class="m-0 text-muted">Every page will be saved unencrypted, and the password will be removed.</p>}
+            {mode === 'decrypt' && <p class="m-0 text-muted">{!ws.isNotebook ? "The password will be removed, and the project's secrets can no longer be read." : 'Every page will be saved unencrypted, and the password will be removed.'}</p>}
             {mode !== 'encrypt' && <TextInput secret autoFocus value={current} onInput={setCurrent} placeholder="Current password" testId="notebook-current-password" onKeyDown={enter} />}
             {mode !== 'decrypt' && (
               <>

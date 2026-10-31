@@ -280,7 +280,7 @@ function AdvancedSection() {
       <p class="mt-0 mb-2 text-muted">Where New Project and Clone suggest putting new projects.</p>
       <div class="flex items-center gap-2 mb-5">
         <div class="flex-1 min-w-0 h-7 px-2 flex items-center bg-editor border border-border truncate" title={settings.projectsFolder ?? undefined} data-testid="projects-folder">
-          {settings.projectsFolder ?? 'SaturnProjects in your home folder'}
+          {settings.projectsFolder ?? 'SaturnProjects/Code in your home folder'}
         </div>
         <Button testId="projects-folder-choose" onClick={() => void window.saturn.projects.pickFolder().then((path) => {
           if (path) void window.saturn.settings.update({ projectsFolder: path });

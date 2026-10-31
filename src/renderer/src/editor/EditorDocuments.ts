@@ -9,6 +9,7 @@ export interface OpenDoc {
   savedText: string;
   eol: 'LF' | 'CRLF';
   dirty: boolean;
+  asText?: boolean;
 }
 
 export type OpenResult = 'opened' | 'binary' | 'too-large';
@@ -234,6 +235,10 @@ export class EditorDocuments {
     const name = this.pageName;
     if (!name) return;
     this.infos.value = this.infos.value.map((i) => (i.reason === 'page' ? { ...i, name: name(i.path) } : i));
+  }
+
+  openAsText(path: string): void {
+    this.docs.value = this.docs.value.map((d) => (d.path === path ? { ...d, asText: true } : d));
   }
 
   setText(path: string, text: string): void {

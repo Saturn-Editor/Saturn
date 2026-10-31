@@ -1,6 +1,6 @@
 import { execFile, type ChildProcess } from 'node:child_process';
 import { basename } from 'node:path';
-import type { MessageKind } from '@shared/modules';
+import { serverLanguages, type MessageKind } from '@shared/modules';
 import type { Breakpoint, DebugFrame, DebugScope, DebugState, DebugVariable, DebugWatch } from '@shared/types';
 import type { BreakpointStore } from '../Store/BreakpointStore';
 import type { InstalledLanguage } from './CodeModuleService';
@@ -209,7 +209,10 @@ export class DebugService {
    */
   async start(projectPath: string, req: { path: string; languageId: string; configuration?: string; processId?: number; launch?: Record<string, unknown>; name?: string }): Promise<void> {
     await this.stop(projectPath);
-    const owner = this.modules.find((m) => m.manifest.contributes?.debugger?.languages.includes(req.languageId));
+    const owner = this.modules.find((m) => {
+      const dbg = m.manifest.contributes?.debugger;
+      return !!dbg && serverLanguages(m.manifest, dbg).includes(req.languageId);
+    });
     const config = owner?.manifest.contributes?.debugger;
     if (!owner || !config) throw new Error(`There's no debugger for this file's language`);
     if (req.processId !== undefined && !config.attach) throw new Error(`${config.label} can't attach to a running process`);

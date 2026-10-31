@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 /** Everything Saturn itself keeps in app-data (Chromium's own files there are left alone). Reset Saturn deletes these. */
@@ -8,6 +9,10 @@ export const SATURN_DATA = [
 ];
 
 /** Locations inside Saturn's app-data folder, not project folders. */
+export function saturnProjectsDir(kind: string): string {
+  return join(homedir(), 'SaturnProjects', kind);
+}
+
 export class AppPaths {
   constructor(readonly root: string) {}
 

@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { cp, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
-  featureKey, ICON_FILE_NAME, ICON_FILES, ICON_SCHEME, LANGUAGE_FEATURES, MANIFEST_FILES, type LanguageFeature, SATURN_API_VERSION, satisfiesCaret, settingDefaults, type ContributionSnapshot, type LanguageManifest,
+  featureKey, ICON_FILE_NAME, ICON_FILES, ICON_SCHEME, LANGUAGE_FEATURES, MANIFEST_FILES, moduleFilesGlob, serverLanguages, type LanguageFeature, SATURN_API_VERSION, satisfiesCaret, settingDefaults, type ContributionSnapshot, type ExtensionManifest, type LanguageManifest,
   type ModuleKind, type ModuleManifest, type ModuleSummary, type SettingValue, type SettingValues,
 } from '@shared/modules';
 import { findFiles } from '../Helpers/findFiles';
@@ -186,7 +186,7 @@ export class CodeModuleService {
 
   /** What every active module contributes. Language-only parts are read from languages only. */
   async snapshot(): Promise<ContributionSnapshot> {
-    const snap: ContributionSnapshot = { languages: [], panels: [], commands: [], previews: [], fileTemplates: [], newProject: [], settings: [], buttons: [], debuggers: [] };
+    const snap: ContributionSnapshot = { languages: [], panels: [], commands: [], previews: [], fileTemplates: [], newProject: [], settings: [], buttons: [], debuggers: [], projectTypes: [], documents: [] };
     for (const { kind, manifest: m, dir, settings } of await this.active()) {
       const c = m.contributes ?? {};
       const badge = m.badge ?? m.name.slice(0, 2).toUpperCase();
@@ -204,8 +204,13 @@ export class CodeModuleService {
       // or previews (whose default view can be chosen).
       const previews = kind === 'language' ? ((m as LanguageManifest).contributes?.previews ?? []) : [];
       if (c.settings?.length || declared.length || previews.length) snap.settings.push({ kind, moduleId: m.id, moduleName: m.name, badge, icon, items: c.settings ?? [], features: declared });
+      if (kind === 'extension') {
+        const ec = (m as ExtensionManifest).contributes ?? {};
+        snap.projectTypes.push(...(ec.projectTypes ?? []).map((t) => ({ ...t, iconUrl: ownIcon(t.icon), moduleId: m.id })));
+        snap.documents.push(...(ec.documents ?? []).map((d) => ({ ...d, moduleId: m.id })));
+      }
       if (kind !== 'language') continue;
-      const served = new Set(lc.languageServer?.languages ?? []);
+      const served = new Set(lc.languageServer ? serverLanguages(m as LanguageManifest, lc.languageServer) : []);
       const enabled = declared.filter((f) => settings[featureKey(f)] !== false);
       snap.languages.push(...(lc.languages ?? []).map((l) => ({
         ...l, moduleId: m.id, badge, icon, hasServer: served.has(l.id), features: served.has(l.id) ? enabled : [],
@@ -214,7 +219,7 @@ export class CodeModuleService {
         snap.debuggers.push({
           moduleId: m.id,
           label: lc.debugger.label,
-          languages: lc.debugger.languages,
+          languages: serverLanguages(m as LanguageManifest, lc.debugger),
           configurations: (lc.debugger.configurations ?? []).map(({ id, label }) => ({ id, label })),
           canAttach: !!lc.debugger.attach,
         });
@@ -251,7 +256,6 @@ export class CodeModuleService {
     for (const { manifest, dir } of await this.activeLanguages()) {
       for (const lang of manifest.contributes?.languages ?? []) {
         if (!lang.grammar) continue;
-        if (lang.scopeName && lang.scopeName !== scopeName) continue;
         const raw = JSON.parse(await readFile(join(dir, lang.grammar), 'utf8')) as { scopeName?: string };
         if (raw.scopeName === scopeName) return raw;
       }
@@ -259,15 +263,14 @@ export class CodeModuleService {
     return null;
   }
 
-  /** Every language whose `workspaceContains:` events match the project, e.g. ["php", "javascript"]. */
+  /** Every language with files in the project, by its file extensions, e.g. ["php", "javascript"]. */
   async detectLanguages(projectPath: string): Promise<string[]> {
     const found: string[] = [];
     for (const { manifest } of await this.activeLanguages()) {
-      const globs = (manifest.activationEvents ?? []).filter((e) => e.startsWith('workspaceContains:')).map((e) => e.slice(18));
-      for (const glob of globs) {
-        if ((await findFiles(projectPath, glob, 1)).length > 0) {
-          const id = manifest.contributes?.languages?.[0]?.id;
-          if (id) found.push(id);
+      for (const lang of manifest.contributes?.languages ?? []) {
+        const glob = moduleFilesGlob(lang.extensions);
+        if (glob && (await findFiles(projectPath, glob, 1)).length > 0) {
+          found.push(lang.id);
           break;
         }
       }

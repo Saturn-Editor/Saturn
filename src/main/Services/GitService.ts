@@ -84,13 +84,23 @@ export class GitService {
     if (!inside) return { repo: false, branch: null, ahead: 0, behind: 0, upstream: null, changes: [], operation: null, conflicts: [] };
     const [branch, changes, counts] = await Promise.all([
       git(this.root, ['branch', '--show-current']).then((o) => o.trim() || null),
-      git(this.root, ['status', '--porcelain=v1', '-z', '-uall']).then(parseStatus),
+      this.unstageReverted().then(() => git(this.root, ['status', '--porcelain=v1', '-z', '-uall'])).then(parseStatus),
       git(this.root, ['rev-list', '--left-right', '--count', '@{upstream}...HEAD']).then((o) => o.trim().split(/\s+/).map(Number), () => null),
     ]);
     const upstream = counts ? await git(this.root, ['rev-parse', '--abbrev-ref', '@{upstream}']).then((o) => o.trim(), () => null) : null;
     // Both sides changed, or one deleted what the other changed: "UU", "AA", "DD", "AU", "UA", "DU", "UD".
     const conflicts = changes.filter((c) => c.index === 'U' || c.worktree === 'U' || (c.index === c.worktree && 'AD'.includes(c.index))).map((c) => c.path);
     return { repo: true, branch, behind: counts?.[0] ?? 0, ahead: counts?.[1] ?? 0, upstream, changes, operation: await this.operation(), conflicts };
+  }
+
+  private async unstageReverted(): Promise<void> {
+    const both = parseStatus(await git(this.root, ['status', '--porcelain=v1', '-z', '-uno']))
+      .filter((c) => c.index === 'M' && c.worktree === 'M')
+      .map((c) => c.path);
+    if (!both.length) return;
+    const differing = new Set((await git(this.root, ['diff', '--name-only', '-z', 'HEAD', '--', ...both])).split('\0').filter(Boolean));
+    const reverted = both.filter((p) => !differing.has(p));
+    if (reverted.length) await git(this.root, ['reset', '-q', '--', ...reverted]);
   }
 
   async init(): Promise<void> {

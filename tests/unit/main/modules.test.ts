@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { SATURN_API_VERSION, satisfiesCaret } from '@shared/modules';
+import { documentFor, SATURN_API_VERSION, satisfiesCaret } from '@shared/modules';
+
+describe('extension documents', () => {
+  it('matches a document type by file extension, ignoring case', () => {
+    const snapshot = { documents: [{ id: 'diagrams.board', label: 'Board', extensions: ['.diagram'] }] };
+    expect(documentFor(snapshot, '/a/b/Board.DIAGRAM')?.id).toBe('diagrams.board');
+    expect(documentFor(snapshot, '/a/b.txt')).toBeUndefined();
+  });
+
+  it('accepts ^0.5 modules on 0.5 but not on 0.4', () => {
+    expect(satisfiesCaret('^0.5', '0.5.0')).toBe(true);
+    expect(satisfiesCaret('^0.5', '0.4.0')).toBe(false);
+  });
+});
 
 describe('module API versions', () => {
   it('needs the same major version', () => {
