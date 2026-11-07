@@ -1,7 +1,7 @@
 # Installers and releases. `npm run dist` builds for this machine; the Release workflow
 # (.github/workflows/release.yml) builds macOS, Windows and Linux and publishes them to GitHub Releases,
 # which is also where Saturn checks for updates (electron-updater).
-appId: com.saturn-editor.saturn
+appId: com.lewismilburn.saturn
 productName: Saturn
 copyright: Copyright © Lewis Milburn
 
